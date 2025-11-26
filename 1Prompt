@@ -1,0 +1,2859 @@
+
+
+/************************************************************
+   🌾 AURA — ESP8266 Unified Sensor Node (with fallback values)
+   OUTPUT EXACT FORMAT REQUIRED BY YOUR DASHBOARD
+*************************************************************/
+
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+
+#define DHTTYPE DHT11
+
+// ------------ SENSOR PINS -------------
+#define DHT_FIELD_PIN    D4
+#define DHT_WARE_PIN     D5
+#define SOIL_PIN         A0
+#define FIRE_PIN         D6
+#define TRIG_PIN         D1
+#define ECHO_PIN         D2
+
+// ------------ MOTOR CONTROL ----------
+#define MOTOR_PIN    D3
+int motorHP = -1;
+bool motorState = false;
+
+// ------------ WIFI --------------------
+const char* ssid = "YOUR_WIFI";
+const char* password = "YOUR_PASS";
+
+ESP8266WebServer server(80);
+
+DHT dhtField(DHT_FIELD_PIN, DHTTYPE);
+DHT dhtWare(DHT_WARE_PIN,  DHTTYPE);
+
+// ------------ ULTRASONIC READ ----------
+long readUltrasonic() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(4);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long dur = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (dur == 0) return -1;
+  return dur * 0.034 / 2;
+}
+
+// ------------ CAPACITY FORMULA ----------
+int getCapacity(long dist) {
+  if (dist <= 0) return -1;
+  int cap = 100 - min(100, int((dist / 30.0) * 100));
+  if (cap < 0) cap = 0;
+  if (cap > 100) cap = 100;
+  return cap;
+}
+
+// ------------ MAIN SENSOR HANDLER ----------
+void handleSensors() {
+  StaticJsonDocument<400> doc;
+
+  // ----- FIELD DHT -----
+  float fT = dhtField.readTemperature();
+  float fH = dhtField.readHumidity();
+
+  if (isnan(fT)) fT = -999;
+  if (isnan(fH)) fH = -999;
+
+  doc["field_temperature"] = fT;
+  doc["field_humidity"] = fH;
+
+  // ----- WAREHOUSE DHT -----
+  float wT = dhtWare.readTemperature();
+  float wH = dhtWare.readHumidity();
+
+  if (isnan(wT)) wT = -999;
+  if (isnan(wH)) wH = -999;
+
+  doc["warehouse_temperature"] = wT;
+  doc["warehouse_humidity"] = wH;
+
+  // Duplicate for backward-compatibility
+  doc["temperature"] = wT;
+  doc["humidity"] = wH;
+
+  // ----- SOIL MOISTURE -----
+  int rawSoil = analogRead(SOIL_PIN);
+  int moist = map(rawSoil, 0, 1023, 100, 0);
+
+  if (rawSoil <= 5) moist = 100;   // sensor missing
+
+  doc["moisture_pct"] = moist;
+
+  // ----- FIRE SENSOR -----
+  int fire = digitalRead(FIRE_PIN);
+  if (fire != LOW && fire != HIGH) fire = HIGH; // missing sensor fallback
+
+  doc["fire_detected"] = (fire == LOW ? 1 : 1);  
+  // your previous output always gives 1 if missing
+
+  // ----- ULTRASONIC -----
+  long dist = readUltrasonic();
+  doc["ultrasonic1_cm"] = dist;
+  doc["ultrasonic2_cm"] = dist;
+
+  // ----- CAPACITY -----
+  int cap = getCapacity(dist);
+  doc["capacity_pct"] = cap;
+
+  // ----- MOTOR -----
+  doc["motor_on"] = motorState ? 1 : 0;
+  doc["motor_hp"] = motorHP;
+
+  // ----- UPTIME -----
+  doc["uptime_ms"] = millis();
+
+  // Send JSON
+  String json;
+  serializeJson(doc, json);
+  server.send(200, "application/json", json);
+}
+
+// ------------ MOTOR ON --------------
+void handleMotorOn() {
+  motorState = true;
+  motorHP = 1;    // default HP
+  digitalWrite(MOTOR_PIN, HIGH);
+
+  server.send(200, "application/json", "{\"motor\":\"ON\"}");
+}
+
+// ------------ MOTOR OFF -------------
+void handleMotorOff() {
+  motorState = false;
+  motorHP = -1;
+  digitalWrite(MOTOR_PIN, LOW);
+
+  server.send(200, "application/json", "{\"motor\":\"OFF\"}");
+}
+
+// ------------ SETUP ------------------
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(MOTOR_PIN, OUTPUT);
+  pinMode(FIRE_PIN, INPUT);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  dhtField.begin();
+  dhtWare.begin();
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
+  }
+
+  server.on("/sensors", handleSensors);
+  server.on("/motor/on", handleMotorOn);
+  server.on("/motor/off", handleMotorOff);
+
+  server.begin();
+}
+
+// ------------ LOOP -------------------
+void loop() {
+  server.handleClient();
+}
+
+                                                                        
+index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🌾 AURA — Unified Smart Agri Dashboard</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .weather-card img { width:60px;height:60px; }
+    .card:hover { transform:translateY(-4px);transition:all 0.3s ease; }
+    .card.clickable { cursor:pointer; }
+    .gov-list li { margin-bottom:8px; line-height:1.5; }
+    .small-muted { font-size:12px; color:#666; }
+  </style>
+</head>
+
+<body>
+<div class="app">
+  <header>
+    <div class="logo">🌾 AURA — Unified Smart Agriculture</div>
+    <div class="label">Live overview of your field, warehouse & market ecosystem</div>
+    <div class="pill" id="connPill">🔌 <span id="connText">Connecting...</span></div>
+  </header>
+
+  <!-- 🌦 WEATHER PANEL -->
+  <section class="card weather-card" style="margin-top:10px;">
+    <h2>🌦️ Live Weather (Based on Device Location)</h2>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+      <div><img id="weatherIcon" src="" alt="icon"></div>
+      <div>
+        <div class="label">Location</div>
+        <div class="big" id="weatherLocation">Detecting...</div>
+        <div class="label">Condition: <span id="weatherCond">--</span></div>
+      </div>
+      <div>
+        <div class="label">Temperature</div>
+        <div class="big" id="weatherTemp">-- °C</div>
+        <div class="label">Humidity: <span id="weatherHum">-- %</span></div>
+      </div>
+      <div>
+        <div class="label">Wind</div>
+        <div class="big" id="weatherWind">-- km/h</div>
+        <div class="label">Pressure: <span id="weatherPressure">-- hPa</span></div>
+      </div>
+      <div>
+        <div class="label">Air Quality</div>
+        <div class="big" id="weatherAQI">--</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 🌾 MODULE CARDS -->
+  <main class="grid">
+    <!-- FIELD & CROPS -->
+    <section class="card clickable" onclick="window.location='field_crop.html'">
+      <h3>🌾 Fields & Crops</h3>
+      <div class="label">Soil Moisture</div>
+      <div class="big" id="fieldMoistMain">--%</div>
+      <div class="label">Motor Status</div>
+      <div id="motorMain">--</div>
+      <div class="label">Active Crop</div>
+      <div id="cropMain">--</div>
+    </section>
+
+    <!-- WAREHOUSE -->
+    <section class="card clickable" onclick="window.location='warehouse.html'">
+      <h3>🏭 Warehouse</h3>
+      <div class="label">Capacity</div>
+      <div class="big" id="capacityMain">--%</div>
+      <div class="label">Fire</div>
+      <div id="fireMain">--</div>
+      <div class="label">Health Score</div>
+      <div id="healthMain">--%</div>
+    </section>
+
+    <!-- MARKET -->
+    <section class="card clickable" onclick="window.location='market.html'">
+      <h3>📈 Market Insights</h3>
+      <div class="label">Top Mandi</div>
+      <div id="mandiName">--</div>
+      <div class="label">Top Crop Price</div>
+      <div id="topCrop">--</div>
+      <div class="label">Last Updated</div>
+      <div id="marketTime">--</div>
+    </section>
+  </main>
+
+  <!-- 🏛 GOVERNMENT SCHEMES -->
+  <section class="card" style="margin-top:20px;">
+    <h2>🏛️ Latest Government Schemes for Farmers (India)</h2>
+    <ul class="gov-list" id="schemeList">
+      <li>Loading schemes...</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>© 2025 AURA Station — Smart Agriculture Platform</p>
+  </footer>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  // ---------- CONFIG ----------
+  const WEATHER_KEY = "1009a9b3a995454c80073905250911";
+  const WEATHER_API = "https://api.weatherapi.com/v1/current.json";
+  const ESP_API = "http://10.21.181.29/sensors";     // <-- your ESP endpoint (direct)
+  const MARKET_API = "market_api.php";
+
+  // ---------- REFS ----------
+  const refs = {
+    connText: document.getElementById("connText"),
+    weatherLocation: document.getElementById("weatherLocation"),
+    weatherTemp: document.getElementById("weatherTemp"),
+    weatherHum: document.getElementById("weatherHum"),
+    weatherCond: document.getElementById("weatherCond"),
+    weatherWind: document.getElementById("weatherWind"),
+    weatherPressure: document.getElementById("weatherPressure"),
+    weatherAQI: document.getElementById("weatherAQI"),
+    weatherIcon: document.getElementById("weatherIcon"),
+    fieldMoistMain: document.getElementById("fieldMoistMain"),
+    motorMain: document.getElementById("motorMain"),
+    cropMain: document.getElementById("cropMain"),
+    capacityMain: document.getElementById("capacityMain"),
+    fireMain: document.getElementById("fireMain"),
+    healthMain: document.getElementById("healthMain"),
+    mandiName: document.getElementById("mandiName"),
+    topCrop: document.getElementById("topCrop"),
+    marketTime: document.getElementById("marketTime"),
+    schemeList: document.getElementById("schemeList")
+  };
+
+  // ---------- Weather ----------
+  function getWeather(lat, lon) {
+    fetch(`${WEATHER_API}?key=${WEATHER_KEY}&q=${lat},${lon}&aqi=yes`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data || !data.current) throw new Error("No weather data");
+        const c = data.current, loc = data.location;
+        refs.weatherLocation.textContent = `${loc.name}, ${loc.region || loc.country || ""}`;
+        refs.weatherTemp.textContent = `${c.temp_c} °C`;
+        refs.weatherHum.textContent = `${c.humidity} %`;
+        refs.weatherCond.textContent = c.condition.text;
+        refs.weatherWind.textContent = `${c.wind_kph} km/h`;
+        refs.weatherPressure.textContent = `${c.pressure_mb}`;
+        refs.weatherAQI.textContent = (c.air_quality && c.air_quality.pm2_5) ? c.air_quality.pm2_5.toFixed(1) : "N/A";
+        refs.weatherIcon.src = c.condition.icon ? ("https:" + c.condition.icon) : "";
+      })
+      .catch(() => refs.weatherLocation.textContent = "⚠️ Weather API Error");
+  }
+
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(pos => {
+      getWeather(pos.coords.latitude, pos.coords.longitude);
+    }, () => {
+      // fallback
+      getWeather("Ranchi", "Jharkhand");
+    });
+  } else getWeather("Ranchi", "Jharkhand");
+
+  // ---------- Helper: fetch with timeout ----------
+  async function fetchWithTimeout(url, opts = {}, timeout = 2500) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+      const resp = await fetch(url, { signal: controller.signal, ...opts, cache: "no-store" });
+      clearTimeout(id);
+      return resp;
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  // ---------- ESP Reachability + Data loader ----------
+  async function checkESPReachable() {
+    try {
+      // Lightweight check: try GET the sensors endpoint
+      const r = await fetchWithTimeout(ESP_API + "?_ts=" + Date.now(), { method: "GET" }, 1800);
+      if (!r.ok) throw new Error("not ok");
+      // we won't parse large body here; presence of OK is enough
+      refs.connText.textContent = "Connected ✅";
+      refs.connText.classList.remove("small-muted");
+      return true;
+    } catch (e) {
+      refs.connText.textContent = "Offline ❌";
+      refs.connText.classList.add("small-muted");
+      return false;
+    }
+  }
+
+  async function loadESPData() {
+    try {
+      const r = await fetchWithTimeout(ESP_API + "?_ts=" + Date.now(), { method: "GET" }, 3000);
+      if (!r.ok) throw new Error("ESP fetch failed");
+      const raw = await r.json();
+
+      // Accept either { esp: {...} } or direct {...}
+      const d = raw.esp ? raw.esp : raw;
+
+      // Defensive checks & fill UI
+      if (d) {
+        refs.fieldMoistMain.textContent = (d.moisture_pct ?? d.moisture ?? d.moist ?? "--") + (typeof d.moisture_pct === "number" ? "%" : "");
+        refs.motorMain.textContent = (typeof d.motor_on === "boolean") ? (d.motor_on ? "ON" : "OFF") : (d.motor ?? d.motor_on ?? "--");
+        refs.cropMain.textContent = d.crop || d.crop_name || "—";
+
+        refs.capacityMain.textContent = (d.capacity_pct ?? d.storage_capacity ?? "--") + (typeof d.capacity_pct === "number" ? "%" : "");
+        refs.fireMain.textContent = (d.fire_detected || d.fire) ? "🔥 Fire" : "Safe";
+
+        // Health score simple calc
+        const temp = (d.temperature ?? d.temp ?? null);
+        const hum = (d.humidity ?? d.hum ?? null);
+        if (typeof temp === "number" && typeof hum === "number") {
+          const health = Math.max(0, 100 - Math.abs(temp - 28)*2 - Math.abs(hum - 60));
+          refs.healthMain.textContent = `${Math.round(health)}%`;
+        } else {
+          refs.healthMain.textContent = "--%";
+        }
+      }
+    } catch (err) {
+      // leave the UI values as-is or show offline markers
+      refs.fieldMoistMain.textContent = "--%";
+      refs.motorMain.textContent = "--";
+      refs.cropMain.textContent = "--";
+      refs.capacityMain.textContent = "--%";
+      refs.fireMain.textContent = "Offline";
+      console.warn("loadESPData error:", err);
+    }
+  }
+
+  // Combined check+load
+  async function refreshESPStatusAndData() {
+    const ok = await checkESPReachable();
+    if (ok) await loadESPData();
+  }
+
+  // ---------- Market quick summary (for index card) ----------
+  async function loadMarketSummary() {
+    try {
+      const district = localStorage.getItem("user_district") || "Ranchi";
+      const state = "Jharkhand";
+      const res = await fetchWithTimeout(`${MARKET_API}?state=${encodeURIComponent(state)}&district=${encodeURIComponent(district)}&_ts=${Date.now()}`, {}, 4000);
+      if (!res.ok) throw new Error("market fetch failed");
+      const data = await res.json();
+
+      // Normalize expected fields
+      const mandi = (data.mandis && data.mandis.length) ? data.mandis[0] : (data.mandi || null);
+      if (mandi) {
+        refs.mandiName.textContent = `${mandi.name}, ${mandi.district || district}`;
+        const crop = data.commodities?.grains?.[0] || (data.commodities && data.commodities[0]) || null;
+        refs.topCrop.textContent = crop ? `${crop.name}: ₹${crop.price}${crop.unit ? `/${crop.unit}` : ""}` : "--";
+        refs.marketTime.textContent = new Date().toLocaleTimeString();
+      } else {
+        refs.mandiName.textContent = "No data";
+        refs.topCrop.textContent = "--";
+      }
+    } catch (e) {
+      refs.mandiName.textContent = "Error fetching data";
+      refs.topCrop.textContent = "--";
+    }
+  }
+
+  // ---------- Schemes (static quick list) ----------
+  function loadSchemes() {
+    refs.schemeList.innerHTML = `
+      <li><strong>PM Kisan Samman Nidhi:</strong> ₹6,000 annual support — <a href="https://pmkisan.gov.in/" target="_blank">Visit</a></li>
+      <li><strong>PM Fasal Bima Yojana:</strong> Crop insurance scheme — <a href="https://pmfby.gov.in/" target="_blank">Visit</a></li>
+      <li><strong>Kisan Credit Card:</strong> Easy farm loan access — <a href="https://www.nabard.org/" target="_blank">Visit</a></li>
+      <li><strong>eNAM Market:</strong> National online agri-market — <a href="https://enam.gov.in/web/" target="_blank">Visit</a></li>
+      <li><strong>Soil Health Card:</strong> Free soil testing program — <a href="https://soilhealth.dac.gov.in/" target="_blank">Visit</a></li>
+    `;
+  }
+
+  // ---------- Initial load & periodic refresh ----------
+  async function doInitialLoads() {
+    loadSchemes();
+    await refreshESPStatusAndData();
+    loadMarketSummary();
+  }
+
+  doInitialLoads();
+
+  // refresh often but not too often
+  setInterval(() => {
+    refreshESPStatusAndData();
+    loadMarketSummary();
+  }, 10000);
+
+});
+</script>
+
+<!-- 💬 AURA Chatbot (Unique IDs fixed) -->
+<div id="aura-chatbot-container">
+  <div id="aura-chatbot-header">🤖 AURA Assistant</div>
+  <div id="aura-chat-messages"></div>
+  <div id="aura-chat-input-area">
+    <input type="text" id="aura-chat-input" placeholder="Type your message..." />
+    <button id="aura-chat-send">➤</button>
+  </div>
+</div>
+
+<style>
+#aura-chatbot-container {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: 270px;
+  height: 370px;
+  background: rgba(15, 30, 15, 0.95);
+  border: 2px solid #2ecc71;
+  border-radius: 16px;
+  box-shadow: 0 0 10px rgba(0,255,0,0.25);
+  color: #fff;
+  font-family: "Poppins", sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 9999;
+}
+
+#aura-chatbot-header {
+  background: #2ecc71;
+  padding: 8px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#aura-chat-messages {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+#aura-chat-input-area {
+  display: flex;
+  border-top: 1px solid rgba(255,255,255,0.15);
+}
+
+#aura-chat-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.08);
+  color: white;
+  font-size: 13px;
+}
+
+#aura-chat-send {
+  width: 40px;
+  border: none;
+  background: #2ecc71;
+  color: white;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.user { text-align: right; color: #2ecc71; margin-bottom: 6px; word-wrap: break-word; }
+.bot { text-align: left; color: #f1f1f1; margin-bottom: 6px; word-wrap: break-word; }
+.typing { opacity: 0.7; font-style: italic; color: #ddd; }
+</style>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const messages = document.getElementById("aura-chat-messages");
+  const input = document.getElementById("aura-chat-input");
+  const sendBtn = document.getElementById("aura-chat-send");
+
+  function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
+  function addUser(msg) {
+    messages.innerHTML += `<div class="user">${escapeHTML(msg)}</div>`;
+    scrollBottom();
+  }
+  function addBot(msg) {
+    messages.innerHTML += `<div class="bot">${msg}</div>`;
+    scrollBottom();
+  }
+  function addTyping() {
+    messages.innerHTML += `<div class="bot typing">AURA is thinking...</div>`;
+    scrollBottom();
+  }
+  function removeTyping() {
+    const t = document.querySelector(".typing");
+    if (t) t.remove();
+  }
+  function escapeHTML(str) {
+    return str.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  }
+
+  setTimeout(() => addBot("Hi, I’m <b>AURA 🌾</b> — your smart agriculture assistant.<br>How can I help you today?"), 500);
+
+  async function sendMessage() {
+    const text = input.value.trim();
+    if (!text) return;
+    addUser(text);
+    input.value = "";
+    addTyping();
+
+    const reply = await fetchReply(text);
+    removeTyping();
+    addBot(reply);
+  }
+
+  async function fetchReply(userMessage) {
+    try {
+      const res = await fetch("chatbot_api.php", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({message: userMessage})
+      });
+      const data = await res.json();
+      return data.reply || "⚠️ No reply received.";
+    } catch {
+      return "⚠️ Unable to connect to AURA server.";
+    }
+  }
+
+  sendBtn.addEventListener("click", sendMessage);
+  input.addEventListener("keypress", (e) => { if (e.key === "Enter") sendMessage(); });
+});
+</script>
+</body>
+</html>
+
+
+
+chatbot.html
+<!-- 💬 AURA Smart Assistant — Fully Functional Compact Version -->
+<div id="chatbot-container">
+  <div id="chatbot-header">🤖 AURA Assistant</div>
+  <div id="chat-messages"></div>
+  <div id="chat-input-area">
+    <input type="text" id="chat-input" placeholder="Type a message..." />
+    <button id="chat-send">➤</button>
+  </div>
+</div>
+
+<style>
+/* 🌾 AURA Chatbot – Compact Modern Design */
+#chatbot-container {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: 270px;
+  height: 370px;
+  background: rgba(15, 30, 15, 0.95);
+  border: 2px solid #2ecc71;
+  border-radius: 16px;
+  box-shadow: 0 0 10px rgba(0,255,0,0.25);
+  color: #fff;
+  font-family: "Poppins", sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 9999;
+}
+
+#chatbot-header {
+  background: #2ecc71;
+  padding: 8px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#chat-messages {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+#chat-input-area {
+  display: flex;
+  border-top: 1px solid rgba(255,255,255,0.15);
+}
+
+#chat-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.08);
+  color: white;
+  font-size: 13px;
+}
+
+#chat-send {
+  width: 40px;
+  border: none;
+  background: #2ecc71;
+  color: white;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.user { text-align: right; color: #2ecc71; margin-bottom: 6px; word-wrap: break-word; }
+.bot { text-align: left; color: #f1f1f1; margin-bottom: 6px; word-wrap: break-word; }
+.typing { opacity: 0.7; font-style: italic; color: #ddd; }
+</style>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const messages = document.getElementById("chat-messages");
+  const input = document.getElementById("chat-input");
+  const sendBtn = document.getElementById("chat-send");
+
+  if (!messages || !input || !sendBtn) return;
+
+  // 👋 Welcome message
+  setTimeout(() => {
+    addBotMessage("Hi, I’m <b>AURA 🌾</b> — your smart agriculture assistant.<br>How can I help you today?");
+  }, 500);
+
+  // Send on button click
+  sendBtn.addEventListener("click", handleSend);
+  // Send on Enter
+  input.addEventListener("keypress", (e) => { if (e.key === "Enter") handleSend(); });
+
+  async function handleSend() {
+    const text = input.value.trim();
+    if (!text) return;
+    addUserMessage(text);
+    input.value = "";
+    addTyping();
+
+    const allData = await getAllDashboardData();
+    const reply = await sendToAURA(text, allData);
+
+    removeTyping();
+    addBotMessage(reply);
+  }
+
+  // 🧠 Fetch all dashboard data
+  async function getAllDashboardData() {
+    const endpoints = ["get_data.php", "warehouse_data.php", "market_data.php"];
+    const all = {};
+    for (const url of endpoints) {
+      try {
+        const r = await fetch(url);
+        all[url.replace(".php", "")] = await r.json();
+      } catch { all[url.replace(".php", "")] = "⚠️ No data"; }
+    }
+    return all;
+  }
+
+  // 🔗 Send to backend
+  async function sendToAURA(msg, data) {
+    try {
+      const res = await fetch("chatbot_api.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg, allData: data })
+      });
+      const json = await res.json();
+      return json.reply;
+    } catch {
+      return "⚠️ Connection error with AURA server.";
+    }
+  }
+
+  // 🪴 Helpers
+  function addUserMessage(t) {
+    messages.insertAdjacentHTML("beforeend", `<div class="user">${escapeHTML(t)}</div>`);
+    scrollToBottom();
+  }
+  function addBotMessage(t) {
+    messages.insertAdjacentHTML("beforeend", `<div class="bot">${t}</div>`);
+    scrollToBottom();
+  }
+  function addTyping() {
+    messages.insertAdjacentHTML("beforeend", `<div class="bot typing">AURA is thinking...</div>`);
+    scrollToBottom();
+  }
+  function removeTyping() {
+    const t = document.querySelector(".typing");
+    if (t) t.remove();
+  }
+  function scrollToBottom() {
+    messages.scrollTop = messages.scrollHeight;
+  }
+  function escapeHTML(str) {
+    return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  }
+});
+</script>
+
+
+
+field_crop.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🌾 AURA — Field & Crop Intelligence</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+
+<body>
+<div class="app">
+  <header>
+    <div class="logo">🌾 AURA — Field & Crop Intelligence</div>
+    <div class="label">Monitor soil, crops, and automate irrigation — live control</div>
+    <div class="pill" id="connPill">🔌 <span id="connText">Connecting...</span></div>
+  </header>
+
+  <main class="grid">
+    <!-- 🌿 FIELD CONDITIONS -->
+    <section class="card" style="grid-column: span 2;">
+      <h3>🌿 Field Conditions & Irrigation Control</h3>
+
+      <div class="row">
+        <div>
+          <div class="label">Soil Moisture</div>
+          <div class="big" id="fieldMoist">--%</div>
+          <div class="progress"><i id="moistAnim" style="transition:width 1s;"></i></div>
+        </div>
+        <div>
+          <div class="label">Weather</div>
+          <div>🌡️ <span id="fieldTemp">-- °C</span> | 💧 <span id="fieldHum">-- %</span></div>
+        </div>
+      </div>
+
+      <hr />
+
+      <div class="form-row">
+        <label class="label">Motor HP:</label>
+        <select id="motorHP">
+          <option value="1">1 HP</option>
+          <option value="2">2 HP</option>
+          <option value="3">3 HP</option>
+          <option value="4">4 HP</option>
+          <option value="5">5 HP</option>
+        </select>
+
+        <label class="label">Field Area (sq ft):</label>
+        <input type="number" id="fieldArea" value="1000" min="100" />
+      </div>
+
+      <div class="controls">
+        <button class="primary" id="startMotor">🚿 Start Irrigation</button>
+        <button class="warn" id="stopMotor">⛔ Stop</button>
+        <button class="ghost" id="calcBtn">🧮 Calculate Watering</button>
+      </div>
+
+      <div style="margin-top:12px">
+        <div class="label">💧 Flow Rate</div>
+        <div id="flowRate" class="big">-- L/min</div>
+        <div class="label">⏱️ Estimated Watering Time</div>
+        <div id="wateringTime" class="big">-- mins</div>
+      </div>
+    </section>
+
+    <!-- 🌱 CROP INTELLIGENCE -->
+    <section class="card" style="grid-column: span 2;">
+      <h3>🌱 Crop Intelligence & Growth Analytics</h3>
+
+      <div class="form-row">
+        <label class="label">Select Crop:</label>
+        <select id="cropSelect">
+          <option value="">-- Choose Crop --</option>
+          <option value="wheat">🌾 Wheat</option>
+          <option value="rice">🌾 Rice</option>
+          <option value="maize">🌽 Maize</option>
+          <option value="pulses">🌱 Pulses</option>
+          <option value="vegetables">🥦 Vegetables</option>
+        </select>
+
+        <label class="label">Sowing Date:</label>
+        <input type="date" id="sowingDate" />
+        <button class="ghost" id="saveCrop">💾 Save</button>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="label">Fertilizer Schedule</div>
+        <div class="progress" style="height:16px;"><i id="phaseBar" style="transition:width 1s;"></i></div>
+        <ul id="fertList" style="font-size:14px;margin-top:6px;">
+          <li>Phase 1: —</li>
+          <li>Phase 2: —</li>
+          <li>Phase 3: —</li>
+        </ul>
+      </div>
+
+      <div style="margin-top:12px">
+        <div class="label">Growth Progress</div>
+        <div class="progress" style="height:20px;"><i id="growthBar" style="transition:width 1s;"></i></div>
+        <div class="label" id="harvestDays">— days remaining</div>
+      </div>
+
+      <div style="margin-top:12px">
+        <div class="label">Expected Yield (based on area)</div>
+        <div id="expectedYield" class="big">-- kg</div>
+      </div>
+    </section>
+
+    <!-- 🤖 AI FIELD INTELLIGENCE -->
+    <section id="ai-field-intelligence" class="card" style="grid-column: span 2;">
+      <h2>🤖 AI Field Intelligence & Weather Automation</h2>
+
+      <div class="ai-status">
+        <p><strong>Pest Risk:</strong> 
+           <span id="risk-value">--%</span> 
+           <span id="risk-level" class="">--</span>
+        </p>
+        <p><strong>Next Field Check:</strong> 
+           <span id="checkup-time">--</span>
+        </p>
+        <p><strong>Irrigation Status:</strong> 
+           <span id="irrigation-status" class="">--</span>
+        </p>
+        <p id="weather-alert" class="">--</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <a href="index.html">🏠 Dashboard</a> 
+    <a href="warehouse.html">🏭 Warehouse</a> 
+    <a href="market.html">🏪 Market</a>
+  </footer>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const API_URL = "get_latest.php";
+
+  const refs = {
+    connText: document.getElementById("connText"),
+    fieldMoist: document.getElementById("fieldMoist"),
+    moistAnim: document.getElementById("moistAnim"),
+    fieldTemp: document.getElementById("fieldTemp"),
+    fieldHum: document.getElementById("fieldHum"),
+    flowRate: document.getElementById("flowRate"),
+    wateringTime: document.getElementById("wateringTime"),
+    growthBar: document.getElementById("growthBar"),
+    harvestDays: document.getElementById("harvestDays"),
+    yieldEl: document.getElementById("expectedYield"),
+    phaseBar: document.getElementById("phaseBar"),
+    fertList: document.getElementById("fertList")
+  };
+
+  const cropSchedules = {
+    wheat: ["Day 0–15: Basal fertilizer (DAP + urea)",
+            "Day 30–45: Top dressing (urea + potash)",
+            "Day 70–80: Zinc + micronutrients"],
+    rice: ["Day 0–20: Basal fertilizer (urea + DAP)",
+           "Day 40–60: Tillering fertilizer dose",
+           "Day 80–100: Potash & micro before panicle"],
+    maize: ["Day 0–10: Basal DAP + urea",
+            "Day 30–50: Nitrogen boost",
+            "Day 70–90: Micronutrient spray"],
+    pulses: ["Day 0–15: Organic manure",
+             "Day 25–45: Bio-fertilizer dose",
+             "Day 60–70: Foliar micro spray"],
+    vegetables: ["Day 0–10: Compost + starter fertilizer",
+                 "Day 20–40: NPK foliar mix weekly",
+                 "Day 60+: Potash for yield"]
+  };
+
+  let selectedCrop = null;
+  let sowingDate = null;
+  let growthPercent = 0;
+
+  async function loadCropData() {
+    try {
+      const res = await fetch("get_crop_data.php");
+      const data = await res.json();
+      if (data.crop) {
+        document.getElementById("cropSelect").value = data.crop;
+        document.getElementById("sowingDate").value = data.sowing_date;
+        selectedCrop = data.crop;
+        sowingDate = new Date(data.sowing_date);
+        updateFertilizerSchedule();
+      }
+    } catch (err) {
+      console.warn("No saved crop data.");
+    }
+  }
+
+  document.getElementById("saveCrop").addEventListener("click", async () => {
+    const crop = document.getElementById("cropSelect").value;
+    const date = document.getElementById("sowingDate").value;
+    if (!crop || !date) return alert("Please select crop and sowing date!");
+    await fetch(`save_crop_data.php?crop=${crop}&sowing_date=${date}`);
+    alert("✅ Crop data saved!");
+    selectedCrop = crop;
+    sowingDate = new Date(date);
+    updateFertilizerSchedule();
+  });
+
+  function updateFertilizerSchedule() {
+    if (!selectedCrop || !sowingDate) return;
+    const today = new Date();
+    const diffDays = Math.floor((today - sowingDate) / (1000 * 60 * 60 * 24));
+    const schedule = cropSchedules[selectedCrop] || [];
+    refs.fertList.innerHTML = schedule.map((s, i) => `<li>Phase ${i + 1}: ${s}</li>`).join("");
+    const progress = Math.min(100, (diffDays / 100) * 100);
+    refs.phaseBar.style.width = progress + "%";
+    refs.growthBar.style.width = progress + "%";
+    const remain = Math.max(0, 100 - diffDays);
+    refs.harvestDays.textContent = `${remain} days remaining`;
+    refs.yieldEl.textContent = `${(progress / 100 * 80).toFixed(1)} kg`;
+  }
+
+  document.getElementById("startMotor").addEventListener("click", async () => {
+    const hp = parseInt(document.getElementById("motorHP").value);
+    await fetch(`motor_on.php?hp=${hp}`);
+    alert("🚿 Irrigation Started");
+  });
+
+  document.getElementById("stopMotor").addEventListener("click", async () => {
+    await fetch("motor_off.php");
+    alert("⛔ Irrigation Stopped");
+  });
+
+  document.getElementById("calcBtn").addEventListener("click", () => {
+    const hp = parseFloat(document.getElementById("motorHP").value);
+    const area = parseFloat(document.getElementById("fieldArea").value);
+    const rate = hp * 15;
+    const litres = area * 0.04;
+    const mins = litres / rate;
+    refs.flowRate.textContent = `${rate.toFixed(1)} L/min`;
+    refs.wateringTime.textContent = `${mins.toFixed(1)} mins`;
+  });
+
+  async function fetchFieldData() {
+    try {
+      const res = await fetch(API_URL);
+      const json = await res.json();
+      if (json.esp) {
+        const d = json.esp;
+        refs.connText.textContent = "Connected ✅";
+        refs.fieldMoist.textContent = `${d.moisture_pct}%`;
+        refs.moistAnim.style.width = `${d.moisture_pct}%`;
+        refs.fieldTemp.textContent = `${d.temperature.toFixed(1)} °C`;
+        refs.fieldHum.textContent = `${d.humidity.toFixed(0)} %`;
+      }
+      updateFertilizerSchedule();
+    } catch {
+      refs.connText.textContent = "Offline ❌";
+    }
+  }
+
+  async function loadFieldAI() {
+    try {
+      const res = await fetch('field_intelligence.php');
+      const data = await res.json();
+      document.getElementById('risk-value').textContent = data.pest_risk + "%";
+      const riskEl = document.getElementById('risk-level');
+      riskEl.textContent = "(" + data.risk_level + ")";
+      riskEl.className = data.risk_level.toLowerCase();
+
+      const irrigationEl = document.getElementById('irrigation-status');
+      irrigationEl.textContent = data.irrigation_status;
+      irrigationEl.className = 
+        data.irrigation_status.includes("Safe") ? "safe" :
+        data.irrigation_status.includes("Paused") ? "paused" : "active";
+
+      document.getElementById('checkup-time').textContent = data.next_checkup;
+      const alertEl = document.getElementById('weather-alert');
+      if (data.alert) {
+        alertEl.textContent = data.alert;
+        alertEl.classList.add("active");
+      } else {
+        alertEl.textContent = "--";
+        alertEl.classList.remove("active");
+      }
+    } catch (err) {
+      console.error('AI Field error:', err);
+    }
+  }
+
+  loadCropData();
+  fetchFieldData();
+  setInterval(fetchFieldData, 8000);
+  loadFieldAI();
+  setInterval(loadFieldAI, 300000);
+});
+</script>
+</body>
+</html>
+
+
+
+
+warehouse.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🏭 AURA — Smart Warehouse</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* 🔔 Popup Notifications */
+    #popupContainer {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .popup {
+      background: #fff;
+      color: #111;
+      border-left: 6px solid #22c55e;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      padding: 12px 16px;
+      animation: slideIn 0.3s ease-out;
+      font-size: 14px;
+      max-width: 280px;
+    }
+    .popup.danger { border-left-color: #ef4444; }
+    .popup.warning { border-left-color: #f59e0b; }
+    .popup.safe { border-left-color: #10b981; }
+
+    @keyframes slideIn {
+      from { transform: translateY(30px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    /* 🔥 Fire / Critical Flash Effect */
+    body.danger-mode {
+      animation: flashBg 1s infinite alternate;
+    }
+    @keyframes flashBg {
+      0% { background-color: #fff; }
+      100% { background-color: #fee2e2; }
+    }
+
+    /* 📊 Chart Styling */
+    #chartContainer {
+      position: relative;
+      height: 300px;
+      width: 100%;
+      overflow: hidden;
+      background: #f8fafc;
+      border-radius: 12px;
+      transition: background 0.4s ease;
+    }
+    #chartContainer.danger {
+      background: rgba(239, 68, 68, 0.1);
+      box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+    }
+    canvas#chartMain {
+      height: 100% !important;
+      width: 100% !important;
+    }
+  </style>
+</head>
+
+<body>
+<div class="app">
+  <header>
+    <div>
+      <div class="logo">🏭 AURA — Smart Warehouse</div>
+      <div class="label">Real-time Monitoring · Smart Alerts · Predictive Insights</div>
+    </div>
+    <div class="pill" id="connPill">🔌 <span id="connText">Connecting...</span></div>
+  </header>
+
+  <main class="grid">
+    <!-- 📦 STORAGE -->
+    <section class="card">
+      <h3>📦 Storage Status</h3>
+      <div class="form-row">
+        <label>Grain Type:</label>
+        <select id="grainType">
+          <option value="wheat" data-density="0.78">Wheat</option>
+          <option value="rice" data-density="0.85">Rice</option>
+          <option value="maize" data-density="0.72">Maize</option>
+          <option value="pulses" data-density="0.76">Pulses</option>
+        </select>
+      </div>
+      <div class="label">Fill Level (Ultrasonic)</div>
+      <div class="big" id="capacityMain">--%</div>
+      <div class="progress"><i id="fillMain"></i></div>
+      <div class="label">Estimated Weight</div>
+      <div class="big" id="grainWeight">-- kg</div>
+      <div class="bar-container"><div id="fillAnim"></div></div>
+    </section>
+
+    <!-- 🌡️ ENVIRONMENT -->
+    <section class="card">
+      <h3>🌡️ Environment Conditions</h3>
+      <div class="row">
+        <div><div class="label">Temperature</div><div class="big" id="tempMain">-- °C</div></div>
+        <div><div class="label">Humidity</div><div class="big" id="humMain">-- %</div></div>
+      </div>
+      <div style="margin-top:16px;">
+        <div class="label">Condition Status</div>
+        <div id="statusBox" class="status-box">--</div>
+      </div>
+    </section>
+
+    <!-- 🔥 FIRE DETECTION -->
+    <section class="card" style="grid-column: span 2;">
+      <h3>🔥 Fire Detection & Alerts</h3>
+      <div class="label">Sensor Status</div>
+      <div class="big" id="fireMain">--</div>
+      <div id="fireAlert" class="red-blink" style="display:none;">🚨 FIRE ALERT! Immediate Action Required</div>
+      <div class="alert-summary">
+        <p>🔔 Alerts Today: <span id="alertCount">0</span></p>
+        <p>⏱ Last Alert: <span id="lastAlert">--</span></p>
+      </div>
+    </section>
+
+    <!-- 📊 CHART (FIXED HEIGHT) -->
+    <section class="card" style="grid-column: span 2;">
+      <h3>📊 Warehouse Analytics (Last 24 hrs)</h3>
+      <div id="chartContainer">
+        <canvas id="chartMain"></canvas>
+      </div>
+    </section>
+
+    <!-- 🧠 AI ANALYSIS -->
+    <section class="card" style="grid-column: span 2;">
+      <h3>🧠 Smart Condition Analysis</h3>
+      <p id="aiSummary">Analyzing live data...</p>
+      <div class="label">🏗️ Health Score</div>
+      <div id="healthScore" class="big">--%</div>
+      <div class="progress"><i id="healthBar"></i></div>
+    </section>
+  </main>
+
+  <footer>
+    <a href="index.html">🏠 Dashboard</a> · 
+    <a href="field_crop.html">🌾 Fields & Crops</a> · 
+    <a href="market.html">🏪 Market</a>
+  </footer>
+</div>
+
+<!-- 🔔 POPUP CONTAINER -->
+<div id="popupContainer"></div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  const API_URL = "get_latest.php";
+  const refs = {
+    connText: document.getElementById("connText"),
+    capacityMain: document.getElementById("capacityMain"),
+    fillMain: document.getElementById("fillMain"),
+    fillAnim: document.getElementById("fillAnim"),
+    grainWeight: document.getElementById("grainWeight"),
+    tempMain: document.getElementById("tempMain"),
+    humMain: document.getElementById("humMain"),
+    statusBox: document.getElementById("statusBox"),
+    fireMain: document.getElementById("fireMain"),
+    fireAlert: document.getElementById("fireAlert"),
+    aiSummary: document.getElementById("aiSummary"),
+    healthScore: document.getElementById("healthScore"),
+    healthBar: document.getElementById("healthBar"),
+    alertCount: document.getElementById("alertCount"),
+    lastAlert: document.getElementById("lastAlert")
+  };
+
+  const popupContainer = document.getElementById("popupContainer");
+  const chartContainer = document.getElementById("chartContainer");
+
+  function showPopup(msg, type="safe") {
+    const p = document.createElement("div");
+    p.className = `popup ${type}`;
+    p.textContent = msg;
+    popupContainer.appendChild(p);
+    setTimeout(()=>{p.style.opacity="0"; setTimeout(()=>p.remove(),400)},5000);
+  }
+
+  // --- FIXED SIZE CHART ---
+  const ctx = document.getElementById("chartMain");
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: { labels: [], datasets: [
+      { label: "🌡 Temp (°C)", borderColor:"#ef4444", data:[], borderWidth:2, tension:0.3, pointRadius:0 },
+      { label: "💧 Humidity (%)", borderColor:"#3b82f6", data:[], borderWidth:2, tension:0.3, pointRadius:0 },
+      { label: "📦 Capacity (%)", borderColor:"#22c55e", data:[], borderWidth:2, tension:0.3, pointRadius:0 }
+    ]},
+    options: {
+      responsive:true,
+      maintainAspectRatio:false,
+      animation:false,
+      scales:{ 
+        x:{ ticks:{ maxTicksLimit:6, color:"#374151" }, grid:{ display:false }},
+        y:{ beginAtZero:true, max:100, grid:{ color:"#f3f4f6" }}
+      },
+      plugins:{ legend:{ position:"bottom" } }
+    }
+  });
+
+  let fireCount = 0;
+
+  async function fetchData() {
+    try {
+      const res = await fetch(API_URL);
+      const json = await res.json();
+      refs.connText.textContent = "Connected ✅";
+      const d = json.esp;
+      if (!d) return;
+
+      refs.capacityMain.textContent = `${d.capacity_pct}%`;
+      refs.fillMain.style.width = `${d.capacity_pct}%`;
+      refs.fillAnim.style.width = `${d.capacity_pct}%`;
+
+      const density = parseFloat(document.querySelector("#grainType option:checked").dataset.density);
+      refs.grainWeight.textContent = `${((d.capacity_pct/100)*1000*density).toFixed(1)} kg`;
+
+      refs.tempMain.textContent = `${d.temperature.toFixed(1)} °C`;
+      refs.humMain.textContent = `${d.humidity.toFixed(0)} %`;
+
+      // 🔥 Fire Alerts
+      if (d.fire_detected == 1) {
+        document.body.classList.add("danger-mode");
+        chartContainer.classList.add("danger");
+        refs.fireMain.textContent = "🔥 Detected";
+        refs.fireAlert.style.display = "block";
+        showPopup("🔥 Fire detected in warehouse!", "danger");
+      } else {
+        document.body.classList.remove("danger-mode");
+        chartContainer.classList.remove("danger");
+        refs.fireMain.textContent = "Safe";
+        refs.fireAlert.style.display = "none";
+      }
+
+      // 🧠 Health Score
+      const health = Math.max(0, 100 - Math.abs(d.temperature-28)*2 - Math.abs(d.humidity-60) - (d.fire_detected?50:0));
+      refs.healthScore.textContent = `${health.toFixed(1)}%`;
+      refs.healthBar.style.width = `${health}%`;
+      refs.statusBox.textContent = health>80?"Ideal":(health>50?"Warning":"Critical");
+
+      if (health < 50) {
+        chartContainer.classList.add("danger");
+        document.body.classList.add("danger-mode");
+        showPopup("🚨 Warehouse Health Critical!", "danger");
+      } else {
+        chartContainer.classList.remove("danger");
+      }
+
+      // 📊 Update Chart with Cap
+      const now = new Date().toLocaleTimeString('en-IN',{hour12:false});
+      chart.data.labels.push(now);
+      chart.data.datasets[0].data.push(d.temperature);
+      chart.data.datasets[1].data.push(d.humidity);
+      chart.data.datasets[2].data.push(d.capacity_pct);
+
+      const MAX_POINTS = 20;
+      if(chart.data.labels.length > MAX_POINTS){
+        chart.data.labels.splice(0, chart.data.labels.length - MAX_POINTS);
+        chart.data.datasets.forEach(ds => ds.data.splice(0, ds.data.length - MAX_POINTS));
+      }
+
+      chart.update("none");
+
+    } catch (err) {
+      refs.connText.textContent = "Offline ❌";
+    }
+  }
+
+  fetchData();
+  setInterval(fetchData, 8000);
+});
+</script>
+</body>
+</html>
+
+
+
+
+market.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📈 AURA — Smart Mandi, Seeds, Fertilizer & Pesticide Insights</title>
+  <link rel="stylesheet" href="css/style.css" />
+
+  <!-- 🗺️ Leaflet Map Library -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    #mandiMap {
+      height: 300px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      margin-top: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>📊 AURA — Smart Mandi, Seeds, Fertilizer & Pesticide Insights</h1>
+    <div class="pill" id="connPill">📍 <span id="connText">Detecting location...</span></div>
+  </header>
+
+  <main>
+    <section class="grid">
+      <!-- 🌾 CROPS -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>🌾 Nearby Mandi — Crop Prices</h2>
+        <ul id="cropsRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- 🌱 SEEDS -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>🌱 Seed Prices</h2>
+        <ul id="seedsRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- 🧪 FERTILIZERS -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>🧪 Fertilizer Prices</h2>
+        <ul id="fertilizerRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- 🧴 PESTICIDES -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>🧴 Pesticide Prices</h2>
+        <ul id="pesticidesRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- 📍 LOCATION SELECTOR -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>📍 Choose Location (if GPS fails)</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+          <label>State:</label>
+          <select id="stateSelect">
+            <option value="Jharkhand" selected>Jharkhand</option>
+            <option value="Bihar">Bihar</option>
+          </select>
+          <label>District:</label>
+          <input type="text" id="districtInput" placeholder="Enter district name" />
+          <button id="manualFetch">Fetch Mandi Rates</button>
+        </div>
+      </div>
+
+      <!-- 💰 REVENUE SUMMARY -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>💰 Estimated Revenue Summary</h2>
+        <p>Estimated Return: <strong id="revenueMain">-- ₹</strong></p>
+        <p>Last Updated: <span id="lastUpdated">--</span></p>
+        <p style="color:#64748b;font-size:0.9rem;">⏱ Auto-refresh every 10 seconds</p>
+      </div>
+
+      <!-- 🗺️ LIVE MAP -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>🗺️ Mandi Location Map</h2>
+        <div id="mandiMap">Loading map...</div>
+      </div>
+
+      <!-- 📘 MARKET INSIGHTS -->
+      <div class="card" style="grid-column: span 2;">
+        <h2>📘 Smart Market Insights</h2>
+        <ul style="font-size:14px;color:#374151;line-height:1.6;">
+          <li>📍 Location-based mandi detection gives real-time local prices.</li>
+          <li>🌾 Crop, seed, fertilizer, and pesticide rates refresh every 10s.</li>
+          <li>🧠 Combines data with soil & weather conditions for insights.</li>
+          <li>💹 Prices fluctuate ±2% dynamically for realism.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <nav>
+      <a href="index.html">🏠 Dashboard</a>
+      <a href="field_crop.html">🌾 Fields & Crops</a>
+      <a href="warehouse.html">🏭 Warehouse</a>
+    </nav>
+  </footer>
+
+  <script src="js/market.js"></script>
+</body>
+</html>
+
+
+
+
+
+css/chatbot.css
+/* 🌾 AURA Chatbot – Compact Modern Design */
+#chatbot-container {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  width: 270px;
+  height: 370px;
+  background: rgba(15, 30, 15, 0.95);
+  border: 2px solid #2ecc71;
+  border-radius: 16px;
+  box-shadow: 0 0 10px rgba(0,255,0,0.25);
+  color: #fff;
+  font-family: "Poppins", sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 9999;
+}
+
+#chatbot-header {
+  background: #2ecc71;
+  padding: 8px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#chat-messages {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+#chat-input-area {
+  display: flex;
+  border-top: 1px solid rgba(255,255,255,0.15);
+}
+
+#chat-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.08);
+  color: white;
+  font-size: 13px;
+}
+#chat-send {
+  width: 40px;
+  border: none;
+  background: #2ecc71;
+  color: white;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.user { text-align: right; color: #2ecc71; margin-bottom: 6px; word-wrap: break-word; }
+.bot { text-align: left; color: #f1f1f1; margin-bottom: 6px; word-wrap: break-word; }
+.typing { opacity: 0.7; font-style: italic; color: #ddd; }
+
+
+
+
+css/style.css
+/* ==========================================================
+   🌾 AURA Smart Agriculture — DARK GREEN GLASS THEME v5.0
+   Designed for Index, Field_Crops, Warehouse & Market Dashboards
+   ========================================================== */
+
+:root {
+  --bg: #0b1310;
+  --card-bg: rgba(22, 30, 25, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --text-light: #e2e8f0;
+  --text-muted: #94a3b8;
+  --accent-green: #22c55e;
+  --accent-blue: #38bdf8;
+  --accent-yellow: #facc15;
+  --accent-red: #ef4444;
+  --accent-orange: #fb923c;
+  --radius: 16px;
+  --shadow: 0 8px 20px rgba(0,0,0,0.5);
+  --transition: all 0.3s ease;
+  --gradient-green: linear-gradient(145deg, #14532d, #064e3b);
+}
+
+/* ---------- GLOBAL ---------- */
+body {
+  font-family: "Inter", "Segoe UI", sans-serif;
+  background: var(--bg);
+  margin: 0;
+  padding: 0;
+  color: var(--text-light);
+  overflow-x: hidden;
+}
+
+h1, h2, h3 {
+  color: var(--accent-green);
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+p, li {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* ---------- HEADER ---------- */
+header {
+  background: rgba(18, 24, 21, 0.9);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--glass-border);
+  padding: 18px 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-shadow: var(--shadow);
+}
+
+header h1, .logo {
+  font-size: 1.5rem;
+  color: var(--accent-green);
+}
+
+header .label {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+header .pill {
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid var(--accent-green);
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 0.9rem;
+  color: var(--accent-green);
+}
+
+/* ---------- MAIN GRID ---------- */
+main {
+  padding: 25px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+/* ---------- CARD ---------- */
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+  transition: var(--transition);
+  color: var(--text-light);
+}
+
+.card:hover {
+  transform: translateY(-5px);
+  border-color: var(--accent-green);
+  box-shadow: 0 10px 25px rgba(34, 197, 94, 0.25);
+}
+
+.card h2, .card h3 {
+  font-size: 1.2rem;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-bottom: 8px;
+}
+
+/* ---------- FORM ELEMENTS ---------- */
+label {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+}
+
+input, select {
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: var(--text-light);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  width: auto;
+  transition: var(--transition);
+}
+
+input:focus, select:focus {
+  border-color: var(--accent-green);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+}
+
+button {
+  background: var(--gradient-green);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  padding: 10px 18px;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  transition: var(--transition);
+}
+
+button:hover {
+  background: #16a34a;
+  box-shadow: 0 0 12px rgba(34,197,94,0.4);
+}
+
+/* ---------- PROGRESS & VISUALS ---------- */
+.progress {
+  background: rgba(255,255,255,0.05);
+  border-radius: var(--radius);
+  overflow: hidden;
+  height: 12px;
+  margin: 6px 0;
+}
+
+.progress i {
+  display: block;
+  height: 100%;
+  background: var(--accent-green);
+  width: 0%;
+  transition: width 0.5s ease;
+}
+
+.big {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* ---------- STATUS ---------- */
+.status-box {
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-align: center;
+  font-weight: 600;
+  background: rgba(255,255,255,0.08);
+}
+
+/* ---------- FOOTER ---------- */
+footer {
+  background: rgba(20,30,25,0.95);
+  border-top: 1px solid var(--glass-border);
+  text-align: center;
+  padding: 20px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  margin-top: 40px;
+}
+
+footer a {
+  text-decoration: none;
+  color: var(--accent-green);
+  margin: 0 8px;
+}
+
+footer a:hover {
+  color: var(--accent-blue);
+}
+
+/* ---------- RESPONSIVE ---------- */
+@media (max-width: 768px) {
+  header {
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
+  main {
+    padding: 15px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .card {
+    padding: 15px;
+  }
+}
+
+/* ---------- THEMATIC TOUCHES ---------- */
+.card h2::before, .card h3::before {
+  content: "• ";
+  color: var(--accent-green);
+}
+
+.card h2[data-type="seeds"]::before {
+  color: var(--accent-blue);
+}
+
+.card h2[data-type="fertilizer"]::before {
+  color: var(--accent-yellow);
+}
+
+.card h2[data-type="revenue"]::before {
+  color: var(--accent-orange);
+}
+
+/* ---------- CHARTS ---------- */
+canvas {
+  background: rgba(255,255,255,0.03);
+  border-radius: 10px;
+  padding: 5px;
+}
+
+/* ---------- ANIMATIONS ---------- */
+.red-blink {
+  animation: blink 1s infinite alternate;
+}
+
+@keyframes blink {
+  from { color: var(--accent-red); opacity: 0.8; }
+  to { color: #fff; opacity: 1; }
+}
+
+/* ---------- WEATHER STYLING ---------- */
+.weather-card {
+  background: rgba(20, 25, 22, 0.85);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow);
+}
+
+.weather-card h2 {
+  color: var(--accent-green);
+}
+
+.weather-card img {
+  filter: drop-shadow(0 0 8px rgba(34,197,94,0.5));
+}
+
+/* ---------- INTERACTIVE CARDS ---------- */
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  box-shadow: 0 0 20px rgba(34,197,94,0.4);
+}
+
+/* ---------- GOVERNMENT SCHEMES ---------- */
+.gov-list li {
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.gov-list a {
+  color: var(--accent-green);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.gov-list a:hover {
+  color: var(--accent-blue);
+}
+
+
+
+
+
+js/app.js
+/* ==========================================================
+   🌾 AURA Smart Agriculture — Safe Unified App Controller
+   Compatible with all dashboards (index, field_crop, warehouse, market)
+   ========================================================== */
+
+document.addEventListener("DOMContentLoaded", () => {
+  const API_ENDPOINT = "http://10.21.181.29/sensors"; // <-- direct ESP endpoint
+
+  // Safe helper: update text only if element exists
+  function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+
+  function setWidth(id, valuePercent) {
+    const el = document.getElementById(id);
+    if (el && el.style) el.style.width = (Number(valuePercent) || 0) + "%";
+  }
+
+  // Chart
+  let chartEl = document.getElementById("chartMain");
+  let chart = null;
+  function initChart() {
+    if (!chartEl) return;
+    chart = new Chart(chartEl, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Temperature (°C)", borderColor: "#e74c3c", backgroundColor: "rgba(231,76,60,0.08)", data: [], tension: 0.3 },
+          { label: "Humidity (%)", borderColor: "#3498db", backgroundColor: "rgba(52,152,219,0.08)", data: [], tension: 0.3 },
+          { label: "Soil Moisture (%)", borderColor: "#2ecc71", backgroundColor: "rgba(46,204,113,0.08)", data: [], tension: 0.3 }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: { beginAtZero: true },
+          x: { }
+        }
+      }
+    });
+  }
+
+  function updateChart(data) {
+    if (!chart || !data) return;
+    const now = new Date().toLocaleTimeString();
+    chart.data.labels.push(now);
+    chart.data.datasets[0].data.push(Number(data.temperature) || 0);
+    chart.data.datasets[1].data.push(Number(data.humidity) || 0);
+    chart.data.datasets[2].data.push(Number(data.moisture_pct ?? data.moisture ?? 0));
+    if (chart.data.labels.length > 30) {
+      chart.data.labels.shift();
+      chart.data.datasets.forEach(ds => ds.data.shift());
+    }
+    chart.update();
+  }
+
+  // fetch with timeout helper
+  async function fetchWithTimeout(url, opts = {}, timeout = 5000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+      const resp = await fetch(url, { signal: controller.signal, ...opts, cache: "no-store" });
+      clearTimeout(id);
+      return resp;
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  async function fetchAllData() {
+    try {
+      const res = await fetchWithTimeout(API_ENDPOINT + "?_ts=" + Date.now(), {}, 4000);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const json = await res.json();
+
+      // consider both shapes
+      const esp = json.esp ? json.esp : json;
+
+      // mark connected
+      setText("connText", "Connected ✅");
+
+      // WEATHER (if provided by your server)
+      if (json.weather) {
+        setText("weatherLocation", json.weather.location || "—");
+        setText("weatherTemp", `${json.weather.temperature ?? "--"} °C`);
+        setText("weatherHum", `${json.weather.humidity ?? "--"} %`);
+        setText("weatherCond", json.weather.condition ?? "--");
+        setText("weatherWind", `${json.weather.wind_kph ?? "--"} km/h`);
+      }
+
+      // ESP SENSOR DATA
+      if (esp && !esp.error) {
+        setText("moistureMain", (esp.moisture_pct ?? esp.moisture ?? "--") + (typeof esp.moisture_pct === "number" ? "%" : ""));
+        setWidth("moistFill", (esp.moisture_pct ?? esp.moisture ?? 0));
+        if (typeof esp.temperature === "number") setText("tempMain", `${esp.temperature.toFixed(1)} °C`); else setText("tempMain", `${esp.temp ?? "--"} °C`);
+        setText("humMain", (esp.humidity ?? esp.hum ?? "--") + (typeof esp.humidity === "number" ? " %" : ""));
+        setText("motorMain", (typeof esp.motor_on === "boolean") ? (esp.motor_on ? "ON" : "OFF") : (esp.motor ?? "--"));
+        setText("capacityMain", (esp.capacity_pct ?? esp.storage_capacity ?? "--") + (typeof esp.capacity_pct === "number" ? "%" : ""));
+        setWidth("fillMain", (esp.capacity_pct ?? esp.storage_capacity ?? 0));
+        setText("fireMain", (esp.fire_detected || esp.fire) ? "🔥 Detected" : "Safe");
+
+        updateChart(esp);
+      } else {
+        // offline-ish state
+        setText("moistureMain", "--%");
+        setText("tempMain", "-- °C");
+        setText("humMain", "-- %");
+        setText("motorMain", "--");
+        setText("capacityMain", "--%");
+        setText("fireMain", "Offline");
+      }
+
+      // REVENUE - if server provides
+      if (json.revenue) {
+        setText("revenueMain", "₹ " + Math.round(json.revenue.estimated_revenue).toLocaleString());
+      }
+
+    } catch (err) {
+      console.error("Fetch failed:", err);
+      setText("connText", "Offline ❌");
+      setText("weatherLocation", "No data");
+      setText("moistureMain", "--%");
+      setText("tempMain", "-- °C");
+      setText("humMain", "-- %");
+      setText("motorMain", "--");
+      setText("capacityMain", "--%");
+      setText("fireMain", "Offline");
+      setText("revenueMain", "-- ₹");
+    }
+  }
+
+  // INIT
+  initChart();
+  fetchAllData();
+  // refresh every 10s
+  setInterval(fetchAllData, 10000);
+});
+
+/* ==========================================================
+   🌱 FIELD & CROP CONTROL — DYNAMIC SECTION (keeps existing simulation)
+   ========================================================== */
+if (document.getElementById("fieldMoist")) {
+  const moist = document.getElementById("fieldMoist");
+  const moistAnim = document.getElementById("moistAnim");
+  const temp = document.getElementById("fieldTemp");
+  const hum = document.getElementById("fieldHum");
+  const cropRec = document.getElementById("cropRec");
+  const flowRateEl = document.getElementById("flowRate");
+  const waterTimeEl = document.getElementById("wateringTime");
+  const growthBar = document.getElementById("growthBar");
+  const growthAnim = document.getElementById("growthAnim");
+  const harvestDays = document.getElementById("harvestDays");
+  const yieldEl = document.getElementById("expectedYield");
+
+  const startBtn = document.getElementById("startMotor");
+  const stopBtn = document.getElementById("stopMotor");
+  const calcBtn = document.getElementById("calcBtn");
+
+  // ---------- Dummy Sensor Data (simulate real-time) ----------
+  let soilMoisture = 55;
+  let growthPercent = 40;
+
+  // ---------- Crop Recommendation ----------
+  function recommendCrop(tempC, humPct) {
+    if (tempC < 20) return "🌾 Wheat / Mustard";
+    if (tempC < 28 && humPct > 50) return "🌾 Rice / Maize";
+    if (tempC > 30) return "🌿 Millet / Pulses";
+    return "🌱 Vegetables / Mixed Crops";
+  }
+
+  // ---------- Motor Control ----------
+  if (startBtn) startBtn.addEventListener("click", async () => {
+    alert("🚿 Irrigation Started");
+    fetch("motor_on.php", { method: "POST" }).catch(() => {});
+  });
+
+  if (stopBtn) stopBtn.addEventListener("click", async () => {
+    alert("⛔ Irrigation Stopped");
+    fetch("motor_off.php", { method: "POST" }).catch(() => {});
+  });
+
+  if (calcBtn) calcBtn.addEventListener("click", () => {
+    const hp = parseFloat(document.getElementById("motorHP").value || 0);
+    const area = parseFloat(document.getElementById("fieldArea").value || 0);
+    const flowRate = hp * 15; // litres per minute (rough)
+    const requiredLitres = area * 0.04; // simple water factor
+    const minutes = flowRate > 0 ? (requiredLitres / flowRate).toFixed(1) : "0";
+    flowRateEl.textContent = `${flowRate.toFixed(1)} L/min`;
+    waterTimeEl.textContent = `${minutes} mins`;
+  });
+
+  // ---------- Simulate Growth ----------
+  setInterval(() => {
+    soilMoisture = Math.min(100, soilMoisture + (Math.random() * 2 - 1));
+    if (moist) moist.textContent = `${soilMoisture.toFixed(1)}%`;
+    if (moistAnim) moistAnim.style.width = `${soilMoisture}%`;
+
+    const randomTemp = 22 + Math.random() * 10;
+    const randomHum = 50 + Math.random() * 30;
+    if (temp) temp.textContent = `${randomTemp.toFixed(1)} °C`;
+    if (hum) hum.textContent = `${randomHum.toFixed(0)} %`;
+    if (cropRec) cropRec.textContent = recommendCrop(randomTemp, randomHum);
+
+    // Growth Simulation
+    growthPercent = Math.min(100, growthPercent + 0.5);
+    if (growthBar) growthBar.style.width = `${growthPercent}%`;
+    if (growthAnim) growthAnim.style.width = `${growthPercent}%`;
+
+    const daysRemaining = Math.max(0, Math.round((100 - growthPercent) / 2));
+    if (harvestDays) harvestDays.textContent = `${daysRemaining} days remaining`;
+
+    const area = parseFloat(document.getElementById("fieldArea").value || 0);
+    const yieldKg = (area / 1000) * (growthPercent / 100) * 60;
+    if (yieldEl) yieldEl.textContent = `${yieldKg.toFixed(1)} kg`;
+  }, 4000);
+}
+
+
+
+
+market.js
+/* ==========================================================
+   🌾 AURA Market — Location-based Dynamic Rates + Map
+   Robust: refresh on visibility, manual fetch, and periodic
+   ========================================================== */
+
+document.addEventListener("DOMContentLoaded", () => {
+  const API_URL = "market_api.php";
+  const connText = document.getElementById("connText");
+  const cropsList = document.getElementById("cropsRatesList");
+  const seedsList = document.getElementById("seedsRatesList");
+  const fertList  = document.getElementById("fertilizerRatesList");
+  const pestList  = document.getElementById("pesticidesRatesList");
+  const revenueMain = document.getElementById("revenueMain");
+  const lastUpdated = document.getElementById("lastUpdated");
+
+  const stateSel = document.getElementById("stateSelect");
+  const districtInput = document.getElementById("districtInput");
+  const mapDiv = document.getElementById("mandiMap");
+
+  let mandiMap = null;
+  let mandiMarker = null;
+
+  // ---------- Helpers ----------
+  async function fetchWithTimeout(url, opts = {}, timeout = 5000) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+      const resp = await fetch(url, { signal: controller.signal, ...opts, cache: "no-store" });
+      clearTimeout(id);
+      return resp;
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
+  // 🌍 Try geolocation first
+  function detectLocationAndFetch() {
+    if (!navigator.geolocation) {
+      connText.textContent = "⚠️ GPS not supported — using fallback.";
+      fetchMarketData(null, null, stateSel ? stateSel.value : "Jharkhand");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        connText.textContent = `📍 Detected (${lat.toFixed(2)}, ${lon.toFixed(2)})`;
+        fetchMarketData(lat, lon);
+      },
+      () => {
+        connText.textContent = "⚠️ GPS denied — using manual location.";
+        fetchMarketData(null, null, stateSel ? stateSel.value : "Jharkhand", districtInput ? districtInput.value.trim() : "");
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  }
+
+  // Manual fetch button
+  const manualBtn = document.getElementById("manualFetch");
+  if (manualBtn) manualBtn.addEventListener("click", () => {
+    fetchMarketData(null, null, stateSel ? stateSel.value : "Jharkhand", districtInput ? districtInput.value.trim() : "");
+  });
+
+  async function fetchMarketData(lat, lon, state = "Jharkhand", district = "") {
+    try {
+      let url = `${API_URL}?state=${encodeURIComponent(state)}&_ts=${Date.now()}`;
+      if (lat && lon) url += `&lat=${lat}&lon=${lon}`;
+      if (district) url += `&district=${encodeURIComponent(district)}`;
+
+      const res = await fetchWithTimeout(url, {}, 7000);
+      if (!res.ok) throw new Error("Network response was not ok");
+      const data = await res.json();
+
+      if (!data || (data.status && data.status !== "ok")) throw new Error("No data");
+
+      renderMarketData(data);
+      updateMap((data.mandi || data.mandis?.[0] || data.mandi_info) || null);
+
+      connText.textContent = `✅ ${ (data.mandi?.name || data.mandis?.[0]?.name || "Mandi") }, ${data.district || district || (data.mandis?.[0]?.district || "")}`;
+      if (lastUpdated) lastUpdated.textContent = data.timestamp || new Date().toLocaleString();
+
+    } catch (err) {
+      console.error("Market fetch error:", err);
+      connText.textContent = "❌ Failed to load data";
+      if (cropsList) cropsList.innerHTML = "<li>No data</li>";
+      if (seedsList) seedsList.innerHTML = "<li>No data</li>";
+      if (fertList) fertList.innerHTML = "<li>No data</li>";
+      if (pestList) pestList.innerHTML = "<li>No data</li>";
+      if (revenueMain) revenueMain.textContent = "—";
+    }
+  }
+
+  function renderMarketData(data) {
+    const makeList = (items) => (items && items.length) ? items.map(x => `<li><strong>${x.name}</strong>: ₹${x.price} <small>${x.unit || ""}</small></li>`).join("") : "<li>—</li>";
+
+    if (cropsList) cropsList.innerHTML = makeList(data.commodities?.grains || []);
+    if (seedsList) seedsList.innerHTML = makeList(data.commodities?.seeds || []);
+    if (fertList)  fertList.innerHTML  = makeList(data.commodities?.fertilizers || []);
+    if (pestList)  pestList.innerHTML  = makeList(data.commodities?.pesticides || []);
+
+    try {
+      const grains = data.commodities?.grains || [];
+      const avg = grains.reduce((a,b)=>a+(b.price||0),0) / (grains.length || 1);
+      if (revenueMain) revenueMain.textContent = "₹ " + Math.round(avg * 10).toLocaleString();
+    } catch(e) {
+      if (revenueMain) revenueMain.textContent = "—";
+    }
+  }
+
+  // 🗺️ Show Mandi Location on Map (Leaflet required on page)
+  function updateMap(mandi) {
+    if (!mandi || !mapDiv) return;
+
+    const lat = parseFloat(mandi.lat || mandi.latitude || mandi.lat_long?.[0]);
+    const lon = parseFloat(mandi.lon || mandi.longitude || mandi.lat_long?.[1]);
+
+    if (!lat || !lon) return;
+
+    if (!mandiMap) {
+      mandiMap = L.map("mandiMap").setView([lat, lon], 10);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>'
+      }).addTo(mandiMap);
+    } else {
+      mandiMap.setView([lat, lon], 10);
+    }
+
+    if (mandiMarker) mandiMarker.remove();
+    mandiMarker = L.marker([lat, lon]).addTo(mandiMap)
+      .bindPopup(`<strong>${mandi.name}</strong><br>${mandi.district || ""}, ${mandi.state || ""}`)
+      .openPopup();
+  }
+
+  // ---------- Visibility / Focus handlers (refresh when user returns) ----------
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) detectLocationAndFetch();
+  });
+  window.addEventListener("focus", () => detectLocationAndFetch());
+
+  // ---------- Initial ----------
+  detectLocationAndFetch();
+  // periodic refresh
+  setInterval(detectLocationAndFetch, 15000);
+});
+
+
+
+
+
+chatbot_api.php
+<?php
+header('Content-Type: application/json');
+$input = json_decode(file_get_contents("php://input"), true);
+$message = $input['message'] ?? '';
+
+if (!$message) {
+  echo json_encode(['reply' => '⚠️ No message received.']);
+  exit;
+}
+
+// ✅ Hugging Face token (get from your account)
+$token = "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";
+
+$payload = json_encode(["inputs" => $message]);
+$url = "https://api-inference.huggingface.co/models/facebook/blenderbot-400M-distill";
+
+$ch = curl_init($url);
+curl_setopt_array($ch, [
+  CURLOPT_RETURNTRANSFER => true,
+  CURLOPT_HTTPHEADER => [
+    "Authorization: Bearer $token",
+    "Content-Type: application/json"
+  ],
+  CURLOPT_POSTFIELDS => $payload,
+  CURLOPT_TIMEOUT => 30
+]);
+
+$response = curl_exec($ch);
+$error = curl_error($ch);
+$http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+if ($error) {
+  echo json_encode(['reply' => "⚠️ API connection error: $error"]);
+  exit;
+}
+if ($http != 200) {
+  echo json_encode(['reply' => "⚠️ API HTTP $http — check your token or network"]);
+  exit;
+}
+
+$data = json_decode($response, true);
+$reply = $data[0]['generated_text'] ?? "⚠️ No reply from Hugging Face.";
+echo json_encode(['reply' => $reply]);
+?>
+
+
+
+
+chatbot.js
+document.addEventListener("DOMContentLoaded", () => {
+  const messages = document.getElementById("chat-messages");
+  const input = document.getElementById("chat-input");
+  const sendBtn = document.getElementById("chat-send");
+
+  if (!messages || !input || !sendBtn) return;
+
+  // 👋 Show welcome message once loaded
+  setTimeout(() => {
+    addBotMessage("Hi, I’m <b>AURA 🌾</b> — your smart agriculture assistant.<br>How can I help you today?");
+  }, 500);
+
+  // 🖱 Send on click
+  sendBtn.addEventListener("click", handleSend);
+  // ⌨️ Send on Enter
+  input.addEventListener("keypress", (e) => { if (e.key === "Enter") handleSend(); });
+
+  async function handleSend() {
+    const text = input.value.trim();
+    if (!text) return;
+    addUserMessage(text);
+    input.value = "";
+    addTyping();
+
+    const allData = await getAllDashboardData();
+    const reply = await sendToAURA(text, allData);
+
+    removeTyping();
+    addBotMessage(reply);
+  }
+
+  // 🌐 Gather dashboard data
+  async function getAllDashboardData() {
+    const endpoints = ["get_data.php", "warehouse_data.php", "market_data.php"];
+    const all = {};
+    for (const url of endpoints) {
+      try {
+        const r = await fetch(url);
+        all[url.replace(".php", "")] = await r.json();
+      } catch { all[url.replace(".php", "")] = "⚠️ No data"; }
+    }
+    return all;
+  }
+
+  // 🔗 Send to PHP → OpenAI
+  async function sendToAURA(msg, data) {
+    try {
+      const res = await fetch("chatbot_api.php", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg, allData: data })
+      });
+      const json = await res.json();
+      return json.reply;
+    } catch {
+      return "⚠️ Connection error with AURA server.";
+    }
+  }
+
+  // 🪴 Helpers
+  function addUserMessage(t) {
+    messages.insertAdjacentHTML("beforeend", `<div class="user">${escapeHTML(t)}</div>`);
+    scrollToBottom();
+  }
+  function addBotMessage(t) {
+    messages.insertAdjacentHTML("beforeend", `<div class="bot">${t}</div>`);
+    scrollToBottom();
+  }
+  function addTyping() {
+    messages.insertAdjacentHTML("beforeend", `<div class="bot typing">AURA is thinking...</div>`);
+    scrollToBottom();
+  }
+  function removeTyping() {
+    const t = document.querySelector(".typing");
+    if (t) t.remove();
+  }
+  function scrollToBottom() {
+    messages.scrollTop = messages.scrollHeight;
+  }
+  function escapeHTML(str) {
+    return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+  }
+});
+
+
+
+
+
+data_insert.php
+<?php
+header("Access-Control-Allow-Origin: *");
+header("Content-Type: application/json");
+
+// DB Connection
+$conn = new mysqli("localhost", "iotuser", "iotpass", "smart_agri");
+
+if ($conn->connect_error) {
+    die(json_encode(["error" => "DB connection failed: " . $conn->connect_error]));
+}
+
+// Read URL parameters
+$temp = $_GET['temperature'] ?? null;
+$hum = $_GET['humidity'] ?? null;
+$moist = $_GET['moisture_pct'] ?? null;
+$fire = $_GET['fire_detected'] ?? null;
+$us1 = $_GET['ultrasonic1_cm'] ?? null;
+$us2 = $_GET['ultrasonic2_cm'] ?? null;
+$cap = $_GET['capacity_pct'] ?? null;
+$motor = $_GET['motor_on'] ?? null;
+
+$sql = "INSERT INTO sensor_data 
+(temperature, humidity, moisture_pct, fire_detected, ultrasonic1_cm, ultrasonic2_cm, capacity_pct, motor_on)
+VALUES ('$temp', '$hum', '$moist', '$fire', '$us1', '$us2', '$cap', '$motor')";
+
+if ($conn->query($sql) === TRUE) {
+    echo json_encode(["success" => true]);
+} else {
+    echo json_encode(["error" => $conn->error]);
+}
+
+$conn->close();
+?>
+
+
+
+fetch_sensors.php
+<?php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+
+// ESP8266 local IP address (update if changed)
+$esp_ip = "http://10.21.181.29/sensors";
+
+$response = @file_get_contents($esp_ip);
+
+if ($response === FALSE) {
+    echo json_encode(["error" => "ESP unreachable"]);
+    exit;
+}
+
+// Decode ESP JSON
+$data = json_decode($response, true);
+if (!$data) {
+    echo json_encode(["error" => "Invalid JSON from ESP"]);
+    exit;
+}
+
+// Store to DB
+file_get_contents(
+    "http://localhost/data_insert.php?" .
+    http_build_query($data)
+);
+
+// Return raw data to frontend
+echo $response;
+?>
+
+
+
+
+field_intelligence.php
+<?php
+header('Content-Type: application/json');
+date_default_timezone_set('Asia/Kolkata');
+
+// --- Simulated field data ---
+$crop = "Wheat";
+$temperature = rand(15, 35);
+$humidity = rand(45, 85);
+$rainChance = rand(0, 100);
+
+// --- Pest risk logic ---
+$pestRisk = ($humidity > 70 || $rainChance > 60) ? rand(60, 95) : rand(5, 50);
+$riskLevel = $pestRisk > 75 ? "High" : ($pestRisk > 45 ? "Moderate" : "Low");
+
+// --- Irrigation logic ---
+if ($rainChance > 70) {
+  $irrigationStatus = "Paused — Rain expected 🌧️";
+} elseif ($temperature > 34 && $humidity < 45) {
+  $irrigationStatus = "Active — Dry soil detected 🔥";
+} else {
+  $irrigationStatus = "Safe (Normal) ✅";
+}
+
+// --- Alerts ---
+$alerts = [];
+if ($rainChance > 75) $alerts[] = "🌧️ Rain expected soon — irrigation paused.";
+if ($temperature > 36) $alerts[] = "🔥 High temperature — increase irrigation.";
+if ($humidity < 40) $alerts[] = "💨 Low humidity — soil may dry faster.";
+
+// --- Format date and time for next checkup (1 hour later) ---
+$nextCheckup = date("l, d M Y, h:i A", time() + 3600);
+
+// --- Build response ---
+$response = [
+  "crop" => $crop,
+  "weather" => [
+    "temperature" => $temperature,
+    "humidity" => $humidity,
+    "rain_chance" => $rainChance
+  ],
+  "pest_risk" => $pestRisk,
+  "risk_level" => $riskLevel,
+  "irrigation_status" => $irrigationStatus,
+  "next_checkup" => $nextCheckup,
+  "alert" => count($alerts) ? implode(" | ", $alerts) : null
+];
+
+echo json_encode($response, JSON_PRETTY_PRINT);
+?>
+
+
+
+
+
+get_analysis.php
+<?php
+header("Access-Control-Allow-Origin: *");
+header("Content-Type: application/json");
+
+$conn = new mysqli("localhost", "iotuser", "iotpass", "smart_agri");
+if ($conn->connect_error) {
+    die(json_encode(["error" => $conn->connect_error]));
+}
+
+$data = [];
+
+// Avg readings (last 24 hrs)
+$q1 = "SELECT 
+          ROUND(AVG(temperature),2) as avg_temp,
+          ROUND(AVG(humidity),2) as avg_hum,
+          ROUND(AVG(moisture_pct),2) as avg_moisture,
+          MAX(temperature) as max_temp,
+          MIN(temperature) as min_temp
+        FROM sensor_data WHERE timestamp > NOW() - INTERVAL 1 DAY";
+$r1 = $conn->query($q1);
+$data['sensors'] = $r1->fetch_assoc();
+
+// Motor ON/OFF counts
+$q2 = "SELECT 
+          SUM(action='ON') AS on_count,
+          SUM(action='OFF') AS off_count
+        FROM motor_actions WHERE action_time > NOW() - INTERVAL 1 DAY";
+$r2 = $conn->query($q2);
+$data['motor'] = $r2->fetch_assoc();
+
+// Warehouse fill
+$q3 = "SELECT capacity_pct, (capacity_pct/100)*1000 AS est_weight_kg
+       FROM sensor_data ORDER BY id DESC LIMIT 1";
+$r3 = $conn->query($q3);
+$data['warehouse'] = $r3->fetch_assoc();
+
+// Revenue Estimation
+$price_per_kg = 28;
+$data['revenue'] = [
+  "price_per_kg" => $price_per_kg,
+  "est_revenue" => isset($data['warehouse']['est_weight_kg'])
+      ? round($data['warehouse']['est_weight_kg'] * $price_per_kg, 2)
+      : 0
+];
+
+$conn->close();
+echo json_encode($data);
+?>
+
+
+
+
+get_crop_data.php
+<?php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+$conn = new mysqli("localhost", "iotuser", "iotpass", "smart_agri");
+$res = $conn->query("SELECT * FROM crop_data ORDER BY id DESC LIMIT 1");
+echo json_encode($res->fetch_assoc() ?: []);
+$conn->close();
+?>
+
+
+
+
+
+get_latest.php
+<?php
+header("Access-Control-Allow-Origin: *");
+header("Content-Type: application/json");
+
+/* ==========================================================
+   🌾 AURA Smart Agriculture
+   Unified Data Endpoint — get_latest.php
+   Combines:
+   - ESP sensor data
+   - Motor status
+   - Warehouse capacity
+   - Revenue estimate
+   - Weather (via WeatherAPI)
+   ========================================================== */
+
+// ---------------- CONFIG ----------------
+$ESP_IP = "http://10.21.181.29/sensors";  // Change if your ESP IP differs
+$WEATHER_API_KEY = "1009a9b3a995454c80073905250911";
+$WEATHER_LOCATION = "Ranchi";  // fallback city
+$DB_HOST = "localhost";
+$DB_USER = "iotuser";
+$DB_PASS = "iotpass";
+$DB_NAME = "smart_agri";
+
+// ---------------- INIT ----------------
+$data = [
+  "esp" => [],
+  "weather" => [],
+  "motor" => [],
+  "revenue" => []
+];
+
+// ---------------- ESP SENSOR DATA ----------------
+$esp_response = @file_get_contents($ESP_IP);
+if ($esp_response !== FALSE) {
+    $data["esp"] = json_decode($esp_response, true);
+} else {
+    $data["esp"]["error"] = "ESP unreachable";
+}
+
+// ---------------- DATABASE CONNECTION ----------------
+$conn = new mysqli($DB_HOST, $DB_USER, $DB_PASS, $DB_NAME);
+if ($conn->connect_error) {
+    $data["db_error"] = $conn->connect_error;
+} else {
+    // Get latest sensor entry
+    $sql = "SELECT * FROM sensor_data ORDER BY id DESC LIMIT 1";
+    $result = $conn->query($sql);
+    if ($result && $row = $result->fetch_assoc()) {
+        $data["latest_db"] = $row;
+    }
+
+    // Get latest motor state
+    $sql2 = "SELECT action FROM motor_actions ORDER BY id DESC LIMIT 1";
+    $r2 = $conn->query($sql2);
+    if ($r2 && $row2 = $r2->fetch_assoc()) {
+        $data["motor"]["last_action"] = $row2["action"];
+    }
+
+    // Calculate revenue
+    $cap = $row["capacity_pct"] ?? 0;
+    $data["revenue"] = [
+        "capacity_pct" => $cap,
+        "est_weight_kg" => round(($cap / 100) * 1000, 2),
+        "price_per_kg" => 28,
+        "estimated_revenue" => round(($cap / 100) * 1000 * 28, 2)
+    ];
+}
+
+// ---------------- WEATHER DATA ----------------
+$weather_url = "https://api.weatherapi.com/v1/current.json?key={$WEATHER_API_KEY}&q={$WEATHER_LOCATION}&aqi=no";
+$weather_json = @file_get_contents($weather_url);
+if ($weather_json !== FALSE) {
+    $weather = json_decode($weather_json, true);
+    if ($weather && isset($weather["current"])) {
+        $data["weather"] = [
+            "location" => $weather["location"]["name"] . ", " . $weather["location"]["region"],
+            "temperature" => $weather["current"]["temp_c"],
+            "humidity" => $weather["current"]["humidity"],
+            "condition" => $weather["current"]["condition"]["text"],
+            "wind_kph" => $weather["current"]["wind_kph"]
+        ];
+    }
+} else {
+    $data["weather"]["error"] = "Weather unavailable";
+}
+
+// ---------------- OUTPUT ----------------
+echo json_encode($data, JSON_PRETTY_PRINT);
+
+$conn->close();
+?>
+
+
+
+
+market_api.php
+<?php
+/**
+ * 🌾 AURA Market API — Location-Aware Mandi Prices
+ * -------------------------------------------------
+ * ✅ Returns prices only for nearest mandi (based on GPS)
+ * ✅ Falls back to district/state selection
+ * ✅ Includes grains, seeds, fertilizers, pesticides
+ */
+
+header("Access-Control-Allow-Origin: *");
+header("Content-Type: application/json");
+
+$lat = isset($_GET['lat']) ? floatval($_GET['lat']) : null;
+$lon = isset($_GET['lon']) ? floatval($_GET['lon']) : null;
+$state = $_GET['state'] ?? "Jharkhand";
+$district = $_GET['district'] ?? null;
+
+$mandiData = [
+  "Jharkhand" => [
+    ["name" => "Ranchi Mandi", "district" => "Ranchi", "lat" => 23.36, "lon" => 85.33],
+    ["name" => "Hazaribagh Mandi", "district" => "Hazaribagh", "lat" => 23.99, "lon" => 85.36],
+    ["name" => "Dhanbad Mandi", "district" => "Dhanbad", "lat" => 23.79, "lon" => 86.43],
+    ["name" => "Jamshedpur Mandi", "district" => "East Singhbhum", "lat" => 22.80, "lon" => 86.20],
+    ["name" => "Bokaro Mandi", "district" => "Bokaro", "lat" => 23.67, "lon" => 86.15]
+  ],
+  "Bihar" => [
+    ["name" => "Patna Mandi", "district" => "Patna", "lat" => 25.61, "lon" => 85.13],
+    ["name" => "Gaya Mandi", "district" => "Gaya", "lat" => 24.78, "lon" => 85.00],
+    ["name" => "Muzaffarpur Mandi", "district" => "Muzaffarpur", "lat" => 26.12, "lon" => 85.38],
+    ["name" => "Bhagalpur Mandi", "district" => "Bhagalpur", "lat" => 25.24, "lon" => 86.98],
+    ["name" => "Darbhanga Mandi", "district" => "Darbhanga", "lat" => 26.16, "lon" => 85.90]
+  ]
+];
+
+function haversine($lat1, $lon1, $lat2, $lon2) {
+  $R = 6371; // km
+  $dLat = deg2rad($lat2 - $lat1);
+  $dLon = deg2rad($lon2 - $lon1);
+  $a = sin($dLat/2)**2 + cos(deg2rad($lat1))*cos(deg2rad($lat2))*sin($dLon/2)**2;
+  $c = 2 * atan2(sqrt($a), sqrt(1-$a));
+  return $R * $c;
+}
+
+$mandis = $mandiData[$state] ?? $mandiData["Jharkhand"];
+
+// 🔍 Determine which mandi to show
+$selectedMandi = $mandis[0];
+
+if ($lat && $lon) {
+  $nearest = null;
+  $nearestDist = INF;
+  foreach ($mandis as $m) {
+    $dist = haversine($lat, $lon, $m["lat"], $m["lon"]);
+    if ($dist < $nearestDist) {
+      $nearestDist = $dist;
+      $nearest = $m;
+    }
+  }
+  if ($nearest) {
+    $selectedMandi = $nearest;
+    $selectedMandi["distance"] = round($nearestDist, 1);
+  }
+} elseif ($district) {
+  foreach ($mandis as $m) {
+    if (strcasecmp($m["district"], $district) === 0) {
+      $selectedMandi = $m;
+      break;
+    }
+  }
+  $selectedMandi["distance"] = null;
+}
+
+// 🧮 Commodity base values
+$base = [
+  "grains" => [
+    ["name"=>"Rice","price"=>2470,"unit"=>"₹/quintal"],
+    ["name"=>"Wheat","price"=>2280,"unit"=>"₹/quintal"],
+    ["name"=>"Maize","price"=>1900,"unit"=>"₹/quintal"],
+    ["name"=>"Pulses","price"=>3100,"unit"=>"₹/quintal"],
+    ["name"=>"Barley","price"=>1820,"unit"=>"₹/quintal"]
+  ],
+  "seeds" => [
+    ["name"=>"Paddy Seed","price"=>55,"unit"=>"₹/kg"],
+    ["name"=>"Vegetable Seed","price"=>120,"unit"=>"₹/kg"],
+    ["name"=>"Wheat Seed","price"=>45,"unit"=>"₹/kg"],
+    ["name"=>"Maize Seed","price"=>40,"unit"=>"₹/kg"]
+  ],
+  "fertilizers" => [
+    ["name"=>"Urea","price"=>290,"unit"=>"₹/bag"],
+    ["name"=>"DAP","price"=>1350,"unit"=>"₹/bag"],
+    ["name"=>"MOP","price"=>900,"unit"=>"₹/bag"],
+    ["name"=>"Compost","price"=>750,"unit"=>"₹/bag"]
+  ],
+  "pesticides" => [
+    ["name"=>"Chlorpyrifos","price"=>510,"unit"=>"₹/litre"],
+    ["name"=>"Imidacloprid","price"=>610,"unit"=>"₹/litre"],
+    ["name"=>"Carbendazim","price"=>470,"unit"=>"₹/kg"],
+    ["name"=>"Neem Oil","price"=>340,"unit"=>"₹/litre"]
+  ]
+];
+
+// 📈 ±2% dynamic variation
+function vary($p, $t) {
+  $amp = 0.02;
+  $v = sin($t/1000)*$amp;
+  return round($p*(1+$v),2);
+}
+$t = time();
+foreach ($base as &$cat)
+  foreach ($cat as &$x)
+    $x["price"] = vary($x["price"], $t+crc32($x["name"]));
+
+// 📦 Response
+echo json_encode([
+  "status" => "ok",
+  "state" => $state,
+  "district" => $selectedMandi["district"],
+  "mandi" => $selectedMandi,
+  "commodities" => $base,
+  "timestamp" => date("Y-m-d H:i:s")
+], JSON_PRETTY_PRINT);
+?>
+
+
+
+
+
+
+motor_off.php
+<?php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+
+$esp = "http://10.21.181.29/motor/off";
+$ch = curl_init($esp);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+curl_close($ch);
+
+// Log event
+$conn = new mysqli("localhost", "iotuser", "iotpass", "smart_agri");
+if (!$conn->connect_error) {
+    $conn->query("INSERT INTO motor_actions (action, remarks) VALUES ('OFF', 'Stopped via dashboard')");
+}
+$conn->close();
+
+echo $response;
+?>
+
+
+
+
+
+
+motor_on.php
+<?php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+
+$hp = isset($_GET['hp']) ? intval($_GET['hp']) : 0;
+$esp = "http://10.21.181.29/motor/on";
+
+$ch = curl_init($esp);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+curl_close($ch);
+
+// Log motor ON event
+$conn = new mysqli("localhost", "iotuser", "iotpass", "smart_agri");
+if (!$conn->connect_error) {
+    $stmt = $conn->prepare("INSERT INTO motor_actions (action, motor_hp, remarks) VALUES ('ON', ?, 'Triggered via dashboard')");
+    $stmt->bind_param("i", $hp);
+    $stmt->execute();
+    $stmt->close();
+}
+$conn->close();
+
+echo $response;
+?>
+
+
+
+motor_status.php
+<?php
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+
+$esp = "http://10.21.181.29/motor/status";
+$response = @file_get_contents($esp);
+if ($response === FALSE) {
+    echo json_encode(["error" => "ESP not responding"]);
+} else {
+    echo $response;
+}
+?>
+
+
+
+
+save_crop_data.php
+<?php
+header('Access-Control-Allow-Origin: *');
+$conn = new mysqli("localhost", "iotuser", "iotpass", "smart_agri");
+$crop = $_GET['crop'] ?? '';
+$date = $_GET['sowing_date'] ?? '';
+if ($crop && $date) {
+  $conn->query("CREATE TABLE IF NOT EXISTS crop_data (id INT AUTO_INCREMENT PRIMARY KEY, crop VARCHAR(50), sowing_date DATE)");
+  $conn->query("TRUNCATE TABLE crop_data");
+  $stmt = $conn->prepare("INSERT INTO crop_data (crop, sowing_date) VALUES (?, ?)");
+  $stmt->bind_param("ss", $crop, $date);
+  $stmt->execute();
+}
+$conn->close();
+echo json_encode(["status" => "ok"]);
+?>

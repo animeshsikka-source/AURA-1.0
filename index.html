@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>🌾 AURA — Unified Smart Agri Dashboard</title>
+
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    .weather-card img {
+      width: 60px;
+      height: 60px;
+    }
+
+    .card:hover {
+      transform: translateY(-4px);
+      transition: all 0.3s ease;
+    }
+
+    .card.clickable {
+      cursor: pointer;
+    }
+
+    .gov-list li {
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .calc-input {
+      width: 100%;
+      padding: 7px;
+      margin: 6px 0 10px 0;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      background: #fff;
+    }
+
+    .calc-btn {
+      margin-top: 5px;
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      background: #2ecc71;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .calc-btn:hover {
+      background: #28b862;
+    }
+
+    .calc-output {
+      margin-top: 10px;
+      padding: 10px;
+      background: #f2f2f2;
+      border-radius: 6px;
+      font-weight: 600;
+    }
+
+    .scheme-loan-grid {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+
+    .scheme-loan-grid .card {
+      flex: 1 1 330px;
+    }
+
+    @media (max-width: 768px) {
+      .scheme-loan-grid {
+        flex-direction: column;
+      }
+    }
+
+    /* Chatbot Button + Popup */
+    #chat-min-btn {
+      position: fixed;
+      bottom: 15px;
+      right: 15px;
+      width: 55px;
+      height: 55px;
+      background: #2ecc71;
+      border-radius: 50%;
+      color: white;
+      font-size: 26px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      z-index: 99999;
+    }
+
+    #chat-popup {
+      position: fixed;
+      bottom: 15px;
+      right: 15px;
+      width: 330px;
+      height: 460px;
+      background: rgba(15, 30, 15, 0.95);
+      border: 2px solid #2ecc71;
+      border-radius: 14px;
+      display: none;
+      flex-direction: column;
+      z-index: 99999;
+    }
+
+    #chat-popup-header {
+      background: #2ecc71;
+      padding: 8px;
+      color: white;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: 600;
+    }
+
+    #chat-close {
+      cursor: pointer;
+      font-size: 20px;
+    }
+
+    #chat-frame {
+      width: 100%;
+      height: calc(100% - 35px);
+      border: none;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+
+    <header>
+      <div class="logo">🌾 AURA — Unified Smart Agriculture</div>
+      <div class="label">Live overview of your field, warehouse & market ecosystem</div>
+      <div class="pill" id="connPill">🔌 <span id="connText">Connecting...</span></div>
+    </header>
+
+    <!-- 🌦 WEATHER PANEL -->
+    <section class="card weather-card" style="margin-top:10px;">
+      <h2>🌦️ Live Weather (Based on Device Location)</h2>
+      <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+        <div><img id="weatherIcon" src="" alt="icon"></div>
+        <div>
+          <div class="label">Location</div>
+          <div class="big" id="weatherLocation">Detecting...</div>
+          <div class="label">Condition: <span id="weatherCond">--</span></div>
+        </div>
+
+        <div>
+          <div class="label">Temperature</div>
+          <div class="big" id="weatherTemp">-- °C</div>
+          <div class="label">Humidity: <span id="weatherHum">--%</span></div>
+        </div>
+
+        <div>
+          <div class="label">Wind</div>
+          <div class="big" id="weatherWind">-- km/h</div>
+          <div class="label">Pressure: <span id="weatherPressure">-- hPa</span></div>
+        </div>
+
+        <div>
+          <div class="label">Air Quality</div>
+          <div class="big" id="weatherAQI">--</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 🌾 MODULE CARDS -->
+    <main class="grid">
+      <section class="card clickable" onclick="window.location='field_crop.html'">
+        <h3>🌾 Fields & Crops</h3>
+        <div class="label">Soil Moisture</div>
+        <div class="big" id="fieldMoistMain">--%</div>
+
+        <div class="label">Motor Status</div>
+        <div id="motorMain">--</div>
+
+        <div class="label">Active Crop</div>
+        <div id="cropMain">--</div>
+      </section>
+
+      <section class="card clickable" onclick="window.location='warehouse.html'">
+        <h3>🏭 Warehouse</h3>
+        <div class="label">Capacity</div>
+        <div class="big" id="capacityMain">--%</div>
+
+        <div class="label">Fire</div>
+        <div id="fireMain">--</div>
+
+        <div class="label">Health Score</div>
+        <div id="healthMain">--%</div>
+      </section>
+
+      <section class="card clickable" onclick="window.location='market.html'">
+        <h3>📈 Market Insights</h3>
+        <div class="label">Top Mandi</div>
+        <div id="mandiName">--</div>
+
+        <div class="label">Top Crop Price</div>
+        <div id="topCrop">--</div>
+
+        <div class="label">Last Updated</div>
+        <div id="marketTime">--</div>
+      </section>
+    </main>
+
+    <!-- 🌱 FARMER HUB -->
+    <section style="margin-top:20px;">
+      <h2>🌱 Farmer Support Hub</h2>
+
+      <div class="scheme-loan-grid">
+
+        <!-- GOV SCHEMES -->
+        <div class="card">
+          <h3>🏛️ Latest Government Schemes for Farmers (India)</h3>
+          <ul class="gov-list">
+            <li><strong>PM Kisan Samman Nidhi:</strong> ₹6,000 yearly — <a href="https://pmkisan.gov.in/" target="_blank">Apply</a></li>
+            <li><strong>PM Fasal Bima Yojana:</strong> Crop insurance — <a href="https://pmfby.gov.in/" target="_blank">Visit</a></li>
+            <li><strong>Kisan Credit Card:</strong> 4%-7% easy loans — <a href="https://www.nabard.org/" target="_blank">Learn</a></li>
+            <li><strong>eNAM Market:</strong> Online trading — <a href="https://enam.gov.in/web/" target="_blank">Start</a></li>
+            <li><strong>Soil Health Card:</strong> Free soil test — <a href="https://soilhealth.dac.gov.in/" target="_blank">Check</a></li>
+          </ul>
+        </div>
+
+        <!-- MICRO LOANS -->
+        <div class="card">
+          <h3>💰 Micro Loans at Low Rates for Farmers</h3>
+          <ul class="gov-list">
+            <li><strong>Kisan Credit Card (KCC):</strong> 4%-7%  
+              <a href="https://www.pmkisan.gov.in/Documents/Kcc.pdf" target="_blank">Apply</a>
+            </li>
+            <li><strong>NABARD Micro Irrigation:</strong> Drip & sprinkler loans  
+              <a href="https://www.nabard.org/" target="_blank">Details</a>
+            </li>
+            <li><strong>Agri Infra Fund:</strong> 3% subsidy  
+              <a href="https://agriinfra.dac.gov.in/" target="_blank">Apply</a>
+            </li>
+            <li><strong>Mudra Yojana (Shishu):</strong> ₹50,000  
+              <a href="https://www.mudra.org.in/" target="_blank">Visit</a>
+            </li>
+            <li><strong>Co-operative Bank Loans:</strong> Low EMI  
+              <a href="https://www.indiancooperative.com/" target="_blank">Check</a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- EMI CALC -->
+        <div class="card">
+          <h3>🧮 Mini Loan EMI Calculator</h3>
+
+          <label>Loan Amount (₹)</label>
+          <input id="loanAmt" type="number" class="calc-input" placeholder="e.g., 50000">
+
+          <label>Interest Rate (%)</label>
+          <input id="loanRate" type="number" class="calc-input" placeholder="e.g., 4">
+
+          <label>Duration (Months)</label>
+          <input id="loanMonths" type="number" class="calc-input" placeholder="e.g., 12">
+
+          <button class="calc-btn" onclick="calcEMI()">Calculate EMI</button>
+
+          <div id="emiResult" class="calc-output">Your EMI will appear here</div>
+          <div id="loanSuggestion" class="calc-output" style="margin-top:10px;"></div>
+        </div>
+
+      </div>
+    </section>
+
+    <footer>
+      <p>© 2025 AURA Station — Smart Agriculture Platform</p>
+    </footer>
+  </div>
+
+  <!-- LOGIC SCRIPTS -->
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+
+      const WEATHER_KEY = "1009a9b3a995454c80073905250911";
+      const WEATHER_API = "https://api.weatherapi.com/v1/current.json";
+      const ESP_API = "http://172.21.125.29/sensors";
+      const MARKET_API = "market_api.php";
+
+      const R = {
+        connText: document.getElementById("connText"),
+        weatherLocation: document.getElementById("weatherLocation"),
+        weatherTemp: document.getElementById("weatherTemp"),
+        weatherHum: document.getElementById("weatherHum"),
+        weatherCond: document.getElementById("weatherCond"),
+        weatherWind: document.getElementById("weatherWind"),
+        weatherPressure: document.getElementById("weatherPressure"),
+        weatherAQI: document.getElementById("weatherAQI"),
+        weatherIcon: document.getElementById("weatherIcon"),
+
+        fieldMoistMain: document.getElementById("fieldMoistMain"),
+        motorMain: document.getElementById("motorMain"),
+        cropMain: document.getElementById("cropMain"),
+
+        capacityMain: document.getElementById("capacityMain"),
+        fireMain: document.getElementById("fireMain"),
+        healthMain: document.getElementById("healthMain"),
+
+        mandiName: document.getElementById("mandiName"),
+        topCrop: document.getElementById("topCrop"),
+        marketTime: document.getElementById("marketTime")
+      };
+
+      // Fetch Weather
+      function loadWeather(lat, lon) {
+        fetch(`${WEATHER_API}?key=${WEATHER_KEY}&q=${lat},${lon}&aqi=yes`)
+          .then(r => r.json())
+          .then(d => {
+            if (!d || !d.current) return;
+
+            R.weatherLocation.textContent = `${d.location.name}, ${d.location.region}`;
+            R.weatherTemp.textContent = `${d.current.temp_c} °C`;
+            R.weatherHum.textContent = `${d.current.humidity}%`;
+            R.weatherCond.textContent = d.current.condition.text;
+            R.weatherWind.textContent = `${d.current.wind_kph} km/h`;
+            R.weatherPressure.textContent = `${d.current.pressure_mb}`;
+            R.weatherAQI.textContent = d.current.air_quality?.pm2_5?.toFixed(1) || "N/A";
+            R.weatherIcon.src = "https:" + d.current.condition.icon;
+          });
+      }
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => loadWeather(pos.coords.latitude, pos.coords.longitude),
+          () => loadWeather("Ranchi", "Jharkhand")
+        );
+      } else loadWeather("Ranchi", "Jharkhand");
+
+      // Timeout-based fetch
+      async function fetchTO(url, timeout = 3000) {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), timeout);
+        try {
+          const result = await fetch(url, { signal: controller.signal });
+          clearTimeout(id);
+          return result;
+        } catch (e) {
+          clearTimeout(id);
+          throw e;
+        }
+      }
+
+      // Check ESP Online
+      async function checkESP() {
+        try {
+          const r = await fetchTO(ESP_API + "?_=" + Date.now(), 2000);
+          if (!r.ok) throw 0;
+          R.connText.textContent = "Connected ✅";
+          return true;
+        } catch {
+          R.connText.textContent = "Offline ❌";
+          return false;
+        }
+      }
+
+      // Load Sensor Data
+      async function loadESP() {
+        try {
+          const r = await fetchTO(ESP_API + "?_=" + Date.now(), 3000);
+          const d = await r.json();
+
+          R.fieldMoistMain.textContent = d.moisture_pct + "%";
+          R.motorMain.textContent = d.motor_on ? "ON" : "OFF";
+          R.cropMain.textContent = d.active_crop || d.crop || "--";
+
+          R.capacityMain.textContent = d.capacity_pct + "%";
+          R.fireMain.textContent = d.fire_detected ? "🔥 Fire" : "Safe";
+
+          // Warehouse health score
+          if (typeof d.temperature === "number" && typeof d.humidity === "number") {
+            const score = Math.max(
+              0,
+              100 - Math.abs(d.temperature - 28) * 2 - Math.abs(d.humidity - 60)
+            );
+            R.healthMain.textContent = score + "%";
+          }
+
+          // ⭐ SEND SENSOR DATA TO CHATBOT
+          sendToChatbot({
+            type: "espData",
+            data: d
+          });
+
+        } catch { }
+      }
+
+      // Load Market Prices
+      async function loadMarket() {
+        try {
+          const r = await fetchTO(MARKET_API + "?state=Jharkhand&district=Ranchi");
+          const d = await r.json();
+
+          const mandi = d.mandis?.[0] || d.mandi;
+          if (mandi) {
+            R.mandiName.textContent = mandi.name;
+            const crop = d.commodities?.grains?.[0];
+            if (crop) R.topCrop.textContent = `${crop.name}: ₹${crop.price}`;
+            R.marketTime.textContent = new Date().toLocaleTimeString();
+          }
+        } catch { }
+      }
+
+      async function refreshAll() {
+        if (await checkESP()) loadESP();
+        loadMarket();
+      }
+
+      refreshAll();
+      setInterval(refreshAll, 10000);
+    });
+
+    /* --------------------- EMI CALC --------------------- */
+    function calcEMI() {
+      const P = parseFloat(document.getElementById("loanAmt").value);
+      const r = parseFloat(document.getElementById("loanRate").value) / 1200;
+      const n = parseFloat(document.getElementById("loanMonths").value);
+
+      const result = document.getElementById("emiResult");
+      const suggestionBox = document.getElementById("loanSuggestion");
+
+      if (!P || !r || !n) {
+        result.textContent = "⚠ Please enter all values";
+        suggestionBox.innerHTML = "";
+        return;
+      }
+
+      const emi = (P * r * Math.pow(1 + r, n)) /
+        (Math.pow(1 + r, n) - 1);
+
+      result.textContent = "📌 Monthly EMI: ₹" + emi.toFixed(2);
+
+      const rate = parseFloat(document.getElementById("loanRate").value);
+
+      let s = "";
+      if (rate <= 4) {
+        s = `<b>Best Match: Kisan Credit Card (KCC)</b><br>4%–7% interest.<br>
+        <a href="https://www.pmkisan.gov.in/Documents/Kcc.pdf" target="_blank">Apply</a>`;
+      } else if (rate <= 7) {
+        s = `<b>NABARD Micro Irrigation Loan</b><br>Best for drip & sprinkler.`;
+      } else if (rate <= 10) {
+        s = `<b>Mudra Yojana (Shishu)</b><br>Loan up to ₹50,000.`;
+      } else {
+        s = `<b>Consider shifting to KCC for lower interest.</b>`;
+      }
+
+      suggestionBox.innerHTML = s;
+    }
+
+    /* --------------------- CHATBOT COMMUNICATION --------------------- */
+
+    function sendToChatbot(obj) {
+      document.getElementById("chat-frame").contentWindow.postMessage(obj, "*");
+    }
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+
+      if (data.type === "motor") {
+        if (data.action === "on") {
+          fetch("motor_on.php?hp=1")
+            .then(() => sendToChatbot({ type: "motorResponse", message: "Motor started successfully!" }))
+            .catch(() => sendToChatbot({ type: "motorResponse", message: "Failed to start motor." }));
+        }
+
+        if (data.action === "off") {
+          fetch("motor_off.php")
+            .then(() => sendToChatbot({ type: "motorResponse", message: "Motor stopped successfully!" }))
+            .catch(() => sendToChatbot({ type: "motorResponse", message: "Failed to stop motor." }));
+        }
+      }
+    });
+
+  </script>
+
+  <!-- CHATBOT UI -->
+  <div id="chat-min-btn">🤖</div>
+
+  <div id="chat-popup">
+    <div id="chat-popup-header">
+        Your own Farming Bot
+      <span id="chat-close">✖</span>
+    </div>
+    <iframe id="chat-frame" src="chatbot.html"></iframe>
+  </div>
+
+  <script>
+    document.getElementById("chat-min-btn").onclick = () => {
+      document.getElementById("chat-popup").style.display = "flex";
+      document.getElementById("chat-min-btn").style.display = "none";
+    };
+
+    document.getElementById("chat-close").onclick = () => {
+      document.getElementById("chat-popup").style.display = "none";
+      document.getElementById("chat-min-btn").style.display = "flex";
+    };
+  </script>
+<div id="google_translate_element" style="position:fixed;bottom:15px;left:15px;z-index:99999;"></div>
+
+<script type="text/javascript">
+  function loadGoogleTranslate() {
+    new google.translate.TranslateElement({
+      pageLanguage: 'en',
+      includedLanguages: 'hi,bn,gu,ta,te,kn,ml,mr,pa,or,en',
+      layout: google.translate.TranslateElement.InlineLayout.SIMPLE
+    }, 'google_translate_element');
+
+    // Restore saved language
+    const lang = localStorage.getItem("AURA_LANG");
+    if (lang) {
+      setTimeout(() => {
+        const select = document.querySelector("select.goog-te-combo");
+        if (select) {
+          select.value = lang;
+          select.dispatchEvent(new Event("change"));
+        }
+      }, 1500);
+    }
+  }
+</script>
+
+<script src="//translate.google.com/translate_a/element.js?cb=loadGoogleTranslate"></script>
+
+
+<script>
+document.addEventListener("change", function(e){
+  if(e.target.classList.contains("goog-te-combo")){
+    const lang = e.target.value;
+    localStorage.setItem("AURA_LANG", lang);
+  }
+});
+</script>
+</body>
+</html>

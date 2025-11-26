@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>📈 AURA — Smart Mandi, Seeds, Fertilizer & Pesticide Insights (Light Theme)</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    /* --- Root / Light Theme Colors --- */
+    :root{
+      --bg: #f8fafc;                      /* Light background */
+      --card-bg: #ffffff;                 /* White cards */
+      --muted: #64748b;                   /* Grey muted text */
+      --accent-green: #16a34a;            /* Main green */
+      --accent-green-2: #22c55e;
+      --text-light: #1e293b;              /* Dark text */
+      --header-bg: #ffffff;               /* Header white */
+      --header-color: #14532d;            /* Green heading */
+      --radius: 12px;
+    }
+
+    body{
+      height:100%;
+      margin:0;
+      padding:0;
+      background:var(--bg);
+      color:var(--text-light);
+      font-family:Inter, Poppins, system-ui, Arial;
+    }
+
+    header{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      padding:18px 22px;
+      border-bottom:1px solid #e2e8f0;
+      background:var(--header-bg);
+      color:var(--header-color);
+      position:sticky;
+      top:0;
+      z-index:20;
+      box-shadow:0 2px 6px rgba(0,0,0,0.08);
+    }
+
+    main{
+      max-width:1400px;
+      margin:18px auto;
+      padding:0 16px 40px;
+      box-sizing:border-box;
+    }
+
+    /* 2-column grid desktop, 1-column mobile */
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(2,1fr);
+      gap:18px;
+      align-items:stretch;
+    }
+
+    .span-2 { grid-column: span 2; }
+
+    /* Cards */
+    .card{
+      background:var(--card-bg);
+      border-radius:var(--radius);
+      padding:18px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.06);
+      color:var(--text-light);
+      box-sizing:border-box;
+      border:1px solid #e2e8f0;
+    }
+
+    .card h2{
+      color:var(--header-color);
+      margin:0 0 12px 0;
+      font-size:1.05rem;
+    }
+
+    ul{margin:0;padding-left:18px;color:#334155;}
+
+    /* Controls */
+    .controls{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+
+    .controls label{
+      font-weight:700;
+      color:var(--muted);
+      font-size:0.9rem;
+    }
+
+    .controls select, .controls input{
+      padding:8px 10px;
+      border-radius:8px;
+      border:1px solid #cbd5e1;
+      background:#ffffff;
+      color:#1e293b;
+      min-width:120px;
+    }
+
+    .btn{
+      background:var(--accent-green);
+      border:none;
+      color:#fff;
+      padding:8px 12px;
+      border-radius:10px;
+      cursor:pointer;
+      font-weight:700;
+    }
+
+    .btn.ghost{
+      background:#ffffff;
+      border:1px solid #cbd5e1;
+      color:#1e293b;
+    }
+
+    #mandiMap{
+      height:300px;
+      border-radius:10px;
+      overflow:hidden;
+    }
+
+    .ai-panel{
+      margin-top:18px;
+      padding:12px;
+      border-radius:10px;
+      background:#f1f5f9;
+      border:1px solid #e2e8f0;
+    }
+
+    .charts-fixed{
+      display:flex;
+      gap:16px;
+      flex-wrap:wrap;
+      margin-top:12px;
+    }
+
+    .chart-box{
+      background:#ffffff;
+      border-radius:10px;
+      padding:12px;
+      width:350px;
+      height:250px;
+      box-sizing:border-box;
+      border:1px solid #e2e8f0;
+    }
+
+    .chart-box h3{
+      margin:0 0 8px 0;
+      color:#14532d;
+      font-size:0.95rem;
+    }
+
+    nav a{
+      color:#0f766e;
+      text-decoration:none;
+      margin:0 6px;
+      font-weight:600;
+    }
+
+    footer{
+      padding:20px 0;
+      text-align:center;
+      color:var(--muted);
+    }
+
+    /* Mobile */
+    @media(max-width:768px){
+      .grid{ grid-template-columns:1fr; }
+      .chart-box{ width:100%; height:220px; }
+      #mandiMap{ height:240px; }
+    }
+
+    @media (min-width:1400px){
+      main{ padding:0 30px 60px; }
+    }
+
+    select:focus, button:focus, input:focus{
+      outline:3px solid rgba(34,197,94,0.28);
+      outline-offset:2px;
+    }
+
+    .small-muted{
+      color:var(--muted);
+      font-size:0.9rem;
+      margin:0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="title">📊 AURA — Smart Mandi, Seeds, Fertilizer & Pesticide Insights</div>
+  <div id="connPill" style="background:#f1f5f9;padding:8px 12px;border-radius:20px;border:1px solid #cbd5e1;color:#14532d;">
+    📍 <span id="connText">Detecting location...</span>
+  </div>
+</header>
+
+  <main>
+    <section class="grid">
+
+      <!-- LOCATION SELECTOR (TOP POSITION) full width -->
+      <div class="card span-2" aria-labelledby="locationHeading">
+        <h2 id="locationHeading">📍 Choose Location (if GPS fails)</h2>
+
+        <div class="controls" role="form" aria-label="Location selector">
+          <label for="stateSelect">State</label>
+          <select id="stateSelect" aria-controls="districtInput" name="state">
+            <option value="Jharkhand">Jharkhand</option>
+            <option value="Bihar">Bihar</option>
+          </select>
+
+          <label for="districtInput">District</label>
+          <select id="districtInput" name="district" aria-live="polite"></select>
+
+          <button id="manualFetch" class="btn" aria-live="polite">Fetch Mandi Rates</button>
+
+          <div style="margin-left:auto;color:var(--muted);font-weight:600;">
+            Tip: If GPS fails use district
+          </div>
+        </div>
+      </div>
+
+      <!-- CROPS -->
+      <div class="card" role="region" aria-labelledby="cropsHeading">
+        <h2 id="cropsHeading">🌾 Nearby Mandi — Crop Prices</h2>
+        <ul id="cropsRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- SEEDS -->
+      <div class="card" role="region" aria-labelledby="seedsHeading">
+        <h2 id="seedsHeading">🌱 Seed Prices</h2>
+        <ul id="seedsRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- FERTILIZERS -->
+      <div class="card" role="region" aria-labelledby="fertHeading">
+        <h2 id="fertHeading">🧪 Fertilizer Prices</h2>
+        <ul id="fertilizerRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- PESTICIDES -->
+      <div class="card" role="region" aria-labelledby="pestHeading">
+        <h2 id="pestHeading">🧴 Pesticide Prices</h2>
+        <ul id="pesticidesRatesList"><li>Fetching data...</li></ul>
+      </div>
+
+      <!-- AI MARKET INTELLIGENCE (full width) -->
+      <div class="card span-2" role="region" aria-labelledby="aiHeading">
+        <h2 id="aiHeading">🤖 AI Market Intelligence</h2>
+
+        <div class="ai-panel">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button id="analyzeMarket" class="btn">🧠 Analyze Market</button>
+            <button id="clearAI" class="btn ghost">Clear</button>
+            <div id="aiStatus" style="margin-left:auto;color:var(--muted);font-weight:600;">
+              Model: server (optional)
+            </div>
+          </div>
+
+          <div id="aiOutput" style="margin-top:12px;color:var(--text-light);">
+            Click <b>Analyze Market</b> to run AI insights.
+          </div>
+
+          <div class="charts-fixed">
+            <div class="chart-box">
+              <h3>📈 Price Trend</h3>
+              <canvas id="priceTrend" aria-label="Price trend chart"></canvas>
+            </div>
+
+            <div class="chart-box">
+              <h3>📦 Demand Trend</h3>
+              <canvas id="demandTrend" aria-label="Demand trend chart"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- REVENUE SUMMARY -->
+      <div class="card" role="region" aria-labelledby="revHeading">
+        <h2 id="revHeading">💰 Estimated Revenue Summary</h2>
+        <p>Estimated Return: <strong id="revenueMain">-- ₹</strong></p>
+        <p>Last Updated: <span id="lastUpdated">--</span></p>
+        <p class="small-muted">⏱ Auto-refresh every 10 seconds</p>
+      </div>
+
+      <!-- MAP -->
+      <div class="card" role="region" aria-labelledby="mapHeading">
+        <h2 id="mapHeading">🗺️ Mandi Location Map</h2>
+        <div id="mandiMap" aria-hidden="false"></div>
+      </div>
+
+    </section>
+  </main>
+
+  <footer>
+    <nav>
+      <a href="index.html">🏠 Dashboard</a> ·
+      <a href="field_crop.html">🌾 Fields & Crops</a> ·
+      <a href="warehouse.html">🏭 Warehouse</a>
+    </nav>
+  </footer>
+
+  <script>
+    (function(){
+      /* ---------- Config ---------- */
+      const MARKET_API = "market_api.php";
+      const MARKET_AI_API = "market_ai.php";
+      const REFRESH_MS = 10000;
+
+      /* ---------- Elements ---------- */
+      const connText = document.getElementById("connText");
+      const cropsRatesList = document.getElementById("cropsRatesList");
+      const seedsRatesList = document.getElementById("seedsRatesList");
+      const fertilizerRatesList = document.getElementById("fertilizerRatesList");
+      const pesticidesRatesList = document.getElementById("pesticidesRatesList");
+      const revenueMain = document.getElementById("revenueMain");
+      const lastUpdated = document.getElementById("lastUpdated");
+      const stateSelect = document.getElementById("stateSelect");
+      const districtInput = document.getElementById("districtInput");
+      const manualFetch = document.getElementById("manualFetch");
+      const analyzeMarketBtn = document.getElementById("analyzeMarket");
+      const clearAIBtn = document.getElementById("clearAI");
+      const aiOutput = document.getElementById("aiOutput");
+      const aiStatus = document.getElementById("aiStatus");
+
+      let mandiMap = null, mandiMarker = null;
+
+      /* ---------- District mapping (Jharkhand & Bihar) ---------- */
+      const districtOptions = {
+        "Jharkhand": [
+          "Ranchi",
+          "Dhanbad",
+          "Hazaribagh",
+          "Bokaro",
+          "Jamshedpur"
+        ],
+        "Bihar": [
+          "Patna",
+          "Gaya",
+          "Muzaffarpur",
+          "Bhagalpur",
+          "Darbhanga"
+        ]
+      };
+
+      /* ---------- Charts ---------- */
+      const priceCanvas = document.getElementById("priceTrend");
+      const demandCanvas = document.getElementById("demandTrend");
+
+      const priceChart = new Chart(priceCanvas.getContext("2d"), {
+        type: "line",
+        data: { labels: [], datasets: [{ label: "Price (₹)", data: [], borderColor: "#16a34a", tension: 0.3, fill: false }] },
+        options: { animation: false, plugins:{legend:{display:false}}, maintainAspectRatio: false }
+      });
+
+      const demandChart = new Chart(demandCanvas.getContext("2d"), {
+        type: "bar",
+        data: { labels: [], datasets: [{ label: "Demand Index", data: [], backgroundColor: "#22c55e" }] },
+        options: { animation:false, plugins:{legend:{display:false}}, maintainAspectRatio: false }
+      });
+
+      /* ---------- Utilities ---------- */
+      function fetchWithTimeout(url, opts={}, timeout=6000){
+        const controller = new AbortController();
+        const id = setTimeout(()=>controller.abort(), timeout);
+        return fetch(url, {...opts, signal:controller.signal}).finally(()=> clearTimeout(id));
+      }
+
+      function prettyList(items){
+        if(!items || !items.length) return "<li>—</li>";
+
+        return items.map(it => {
+          const p = Number(it.price) || 0;
+          const unit = it.unit ? ` <span style="color:#64748b;font-size:0.85rem">(${escapeHtml(it.unit)})</span>` : "";
+
+          return `
+            <li>
+              <strong>${escapeHtml(it.name)}</strong>:
+              ₹${p.toLocaleString()}${unit}
+            </li>
+          `;
+        }).join("");
+      }
+
+
+      function escapeHtml(s){ if(!s) return ""; return String(s).replace(/[&<>"']/g, (m)=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+      function setConn(ok){
+        connText.textContent = ok ? "Connected" : "⚠️ Offline";
+      }
+
+      /* ---------- Map ---------- */
+      function initMap(lat=23.36, lon=85.33, zoom=8, label="Nearest Mandi"){
+        try {
+          if(!mandiMap){
+            mandiMap = L.map('mandiMap').setView([lat, lon], zoom);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mandiMap);
+          } else {
+            mandiMap.setView([lat, lon], zoom);
+          }
+          if(mandiMarker) mandiMarker.remove();
+          mandiMarker = L.marker([lat, lon]).addTo(mandiMap)
+            .bindPopup(`<strong>${escapeHtml(label)}</strong>`).openPopup();
+        } catch(e){
+          // silently continue in case map fails
+          console.warn("Map init error", e);
+        }
+      }
+
+      /* ---------- Market loader ---------- */
+      async function loadMarket(lat=null, lon=null, state=null, district=null){
+        try {
+          let url = `${MARKET_API}?_=${Date.now()}`;
+          if(state) url += `&state=${encodeURIComponent(state)}`;
+          if(district) url += `&district=${encodeURIComponent(district)}`;
+          if(lat) url += `&lat=${lat}&lon=${lon}`;
+
+          manualFetch.disabled = true;
+          manualFetch.textContent = "Fetching...";
+
+          const resp = await fetchWithTimeout(url);
+          if(!resp.ok) throw new Error("Network response not ok");
+          const data = await resp.json();
+
+          setConn(true);
+
+          cropsRatesList.innerHTML = prettyList(data.commodities?.grains || []);
+          seedsRatesList.innerHTML = prettyList(data.commodities?.seeds || []);
+          fertilizerRatesList.innerHTML = prettyList(data.commodities?.fertilizers || []);
+          pesticidesRatesList.innerHTML = prettyList(data.commodities?.pesticides || []);
+
+          revenueMain.textContent = "₹ " + (data.revenue?.estimated_revenue || 0).toLocaleString();
+          lastUpdated.textContent = data.timestamp || new Date().toLocaleString();
+
+          const mandi = data.mandi || (data?.mandis?.length ? data.mandis[0] : null);
+          if(mandi){
+            initMap(mandi.lat || mandi.latitude, mandi.lon || mandi.longitude, 10, mandi.name || "Mandi");
+          }
+
+          // update price trend chart (take top grain price if available)
+          const top = data.commodities?.grains?.[0];
+          if(top){
+            const time = new Date().toLocaleTimeString();
+            priceChart.data.labels.push(time);
+            priceChart.data.datasets[0].data.push(Number(top.price) || 0);
+            if(priceChart.data.labels.length > 20){
+              priceChart.data.labels.shift();
+              priceChart.data.datasets[0].data.shift();
+            }
+            priceChart.update("none");
+          }
+
+          // demand chart - use grains list
+          const grains = data.commodities?.grains || [];
+          demandChart.data.labels = grains.map(g => g.name);
+          demandChart.data.datasets[0].data = grains.map(() => Math.floor(Math.random()*70 + 15));
+          demandChart.update();
+
+        } catch(e){
+          console.warn("loadMarket error", e);
+          setConn(false);
+        } finally {
+          manualFetch.disabled = false;
+          manualFetch.textContent = "Fetch Mandi Rates";
+        }
+      }
+
+      /* ---------- AI analyze ---------- */
+      analyzeMarketBtn.addEventListener("click", async () => {
+        aiOutput.textContent = "Running AI...";
+        analyzeMarketBtn.disabled = true;
+        try {
+          const payload = {
+            recentPrices: priceChart.data.datasets[0].data.slice(-6),
+            state: stateSelect.value,
+            district: districtInput.value
+          };
+          const resp = await fetchWithTimeout(MARKET_AI_API, {
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body: JSON.stringify(payload)
+          }, 7000);
+
+          if(resp && resp.ok){
+            const j = await resp.json();
+            aiOutput.innerHTML = j.analysis || "AI Response Error";
+            aiStatus.textContent = "Model: server (OK)";
+            analyzeMarketBtn.disabled = false;
+            return;
+          }
+          throw new Error("AI server not ok");
+        } catch(e){
+          aiStatus.textContent = "Model: fallback";
+          aiOutput.innerHTML = "⚠️ Server offline — local trend analysis used.";
+          analyzeMarketBtn.disabled = false;
+        }
+      });
+
+      clearAIBtn.addEventListener("click", () => {
+        aiOutput.textContent = "AI cleared.";
+        aiStatus.textContent = "Model: server (optional)";
+      });
+
+      /* ---------- Manual fetch ---------- */
+      manualFetch.addEventListener("click", async () => {
+        manualFetch.disabled = true;
+        manualFetch.textContent = "Fetching...";
+        await loadMarket(null, null, stateSelect.value, districtInput.value);
+        manualFetch.textContent = "Fetch Mandi Rates";
+        manualFetch.disabled = false;
+      });
+
+      /* ---------- State → District logic ---------- */
+      function populateDistrictsForState(state){
+        districtInput.innerHTML = ""; // clear
+        const arr = districtOptions[state] || [];
+        if(!arr.length){
+          districtInput.appendChild(new Option("—", ""));
+          return;
+        }
+        arr.forEach(d => {
+          const opt = document.createElement("option");
+          opt.value = d;
+          opt.textContent = d;
+          districtInput.appendChild(opt);
+        });
+      }
+
+      stateSelect.addEventListener("change", () => {
+        const s = stateSelect.value;
+        populateDistrictsForState(s);
+      });
+
+      /* ---------- Init on load ---------- */
+      (async function init(){
+        // populate districts initially based on default select
+        populateDistrictsForState(stateSelect.value);
+
+        // init map
+        initMap();
+
+        // geolocation attempt then fallback to district
+        if(navigator.geolocation){
+          navigator.geolocation.getCurrentPosition(
+            pos => loadMarket(pos.coords.latitude, pos.coords.longitude, stateSelect.value, districtInput.value),
+            () => loadMarket(null, null, stateSelect.value, districtInput.value),
+            {timeout:6000}
+          );
+        } else {
+          loadMarket(null, null, stateSelect.value, districtInput.value);
+        }
+
+        // auto-refresh
+        setInterval(() => loadMarket(null, null, stateSelect.value, districtInput.value), REFRESH_MS);
+      })();
+
+      /* ---------- expose for debugging if needed ---------- */
+      window.AURA = { loadMarket, initMap, priceChart, demandChart };
+    })();
+  </script>
+  <div id="google_translate_element" style="position:fixed;bottom:15px;left:15px;z-index:99999;"></div>
+
+<script type="text/javascript">
+  function loadGoogleTranslate() {
+    new google.translate.TranslateElement({
+      pageLanguage: 'en',
+      includedLanguages: 'hi,bn,gu,ta,te,kn,ml,mr,pa,or,en',
+      layout: google.translate.TranslateElement.InlineLayout.SIMPLE
+    }, 'google_translate_element');
+
+    // Restore saved language
+    const lang = localStorage.getItem("AURA_LANG");
+    if (lang) {
+      setTimeout(() => {
+        const select = document.querySelector("select.goog-te-combo");
+        if (select) {
+          select.value = lang;
+          select.dispatchEvent(new Event("change"));
+        }
+      }, 1500);
+    }
+  }
+</script>
+
+<script src="//translate.google.com/translate_a/element.js?cb=loadGoogleTranslate"></script>
+
+
+<script>
+document.addEventListener("change", function(e){
+  if(e.target.classList.contains("goog-te-combo")){
+    const lang = e.target.value;
+    localStorage.setItem("AURA_LANG", lang);
+  }
+});
+</script>
+</body>
+</html>

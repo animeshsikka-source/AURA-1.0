@@ -1,0 +1,94 @@
+#aura-chatbot {
+  width: 260px;
+  height: 390px;
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: rgba(10, 25, 10, 0.92);
+  border: 2px solid #22c55e;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  font-family: Poppins, sans-serif;
+  color: #fff;
+  overflow: hidden;
+  z-index: 9999;
+}
+
+#aura-chat-header {
+  background: #22c55e;
+  text-align: center;
+  padding: 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#aura-chat-body {
+  flex: 1;
+  padding: 8px;
+  overflow-y: auto;
+  font-size: 13px;
+}
+
+#aura-chat-input-row {
+  display: flex;
+  border-top: 1px solid rgba(255,255,255,0.2);
+}
+
+#aura-chat-input {
+  flex: 1;
+  border: none;
+  padding: 8px;
+  outline: none;
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+
+#aura-chat-send {
+  width: 40px;
+  background: #22c55e;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+}
+
+#voice-btn {
+  width: 38px;
+  background: #1e9d4c;
+  border: none;
+  cursor: pointer;
+  color: #fff;
+  font-size: 18px;
+  border-right: 1px solid rgba(255,255,255,0.25);
+}
+
+#voice-btn.listening {
+  background: #e11d48;
+}
+
+.upload-btn {
+  background:#16a34a;
+  color:white;
+  border:none;
+  padding:5px 10px;
+  border-radius:10px;
+  cursor:pointer;
+  font-size:13px;
+}
+
+.user-msg {
+  text-align: right;
+  margin: 4px 0;
+  color: #22c55e;
+}
+
+.bot-msg {
+  text-align: left;
+  margin: 4px 0;
+  color: #e5e5e5;
+}
+
+.typing {
+  color: #bbb;
+  font-style: italic;
+}
